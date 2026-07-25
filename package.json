@@ -1,0 +1,40 @@
+{
+  "name": "sky-code",
+  "version": "0.1.0",
+  "description": "Interactive command-line AI coding assistant using a LiteLLM backend",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sky": "dist/index.js",
+    "sky-code": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "config",
+    "README.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && node dist/index.js",
+    "dev": "nodemon --watch src --ext ts --exec \"ts-node-esm src/index.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "dotenv": "17.4.2",
+    "inquirer": "14.0.2",
+    "uuid": "14.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "nodemon": "3.1.14",
+    "ts-node": "10.9.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

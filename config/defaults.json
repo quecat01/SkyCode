@@ -1,0 +1,7 @@
+{
+  "apiUrl": "http://YOUR_LITELLM_HOST:4000/v1",
+  "defaultModel": "chatgpt-gpt-5.5",
+  "defaultPermissionMode": "default",
+  "mcpServers": [],
+  "pluginDirs": []
+}
