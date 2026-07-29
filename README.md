@@ -14,8 +14,15 @@ It connects to a LiteLLM server through the OpenAI-compatible API and supports:
 - Lifecycle hooks
 - Sub-agent worker processes
 - Four permission modes
-- Manual and automatic context compaction
+- Configurable manual and automatic context compaction
+- Background tasks with terminal progress tracking
+- Custom command and skill catalog management
+- Current-session history search
+- Directory-specific session resume
+- Startup LiteLLM health checks
+- Cleaner plain-language error messages
 - Private append-only JSONL session logs
+- No WebSocket MCP connections
 
 The normal terminal command is:
 
@@ -24,55 +31,6 @@ sky
 ```
 
 The internal package, repository, and project-folder name is `sky-code`.
-
-## Phase 2 Status
-
-Phase 2 is implemented and verified.
-
-Implemented features include:
-
-- LiteLLM `/v1/chat/completions` streaming
-- Live `/v1/models` model selection
-- Text-based `sky-tool` requests
-- `read_file`
-- `write_file`
-- `edit_file`
-- `run_shell_command`
-- `mcp_call`
-- `delegate_to_agent`
-- MCP stdio transport
-- MCP SSE transport
-- MCP Streamable HTTP transport
-- Plugin discovery and manifest loading
-- Plugin skills and slash commands
-- Plugin-provided MCP servers
-- Plugin-provided sub-agents
-- Plugin hook modules
-- `PreToolUse`
-- `PostToolUse`
-- `PreCompact`
-- `PostCompact`
-- `Notification`
-- `default` permission mode
-- `auto-accept-edits` permission mode
-- `plan` permission mode
-- `bypass` permission mode
-- `/model`
-- `/permissions`
-- `/compact`
-- Automatic compaction under token pressure
-- Private JSONL session logging
-- Automated unit and integration testing
-
-The following items remain deferred to Phase 3:
-
-- Background or long-running jobs with progress tracking
-- Advanced model-aware compaction strategies
-- Custom command and skill catalogue management
-- VS Code and JetBrains integrations
-- Enterprise or multi-team deployment features
-
-WebSocket MCP connections are not supported.
 
 ## Verified Environment
 
@@ -256,6 +214,9 @@ When the same configuration key appears in multiple JSON files, the higher-prior
   "apiUrl": "http://YOUR_LITELLM_HOST:4000/v1",
   "defaultModel": "chatgpt-gpt-5.5",
   "defaultPermissionMode": "default",
+  "compactionThreshold": 6000,
+  "compactionStrategy": "summarise",
+  "compactionWindowSize": 20,
   "mcpServers": [
     {
       "name": "local-example",
@@ -350,6 +311,51 @@ An absolute path is used directly.
 A relative path is resolved from the project directory where Sky Code was started.
 
 Every entry must be a non-empty string.
+
+#### `compactionThreshold`
+
+The estimated active-conversation token count that triggers automatic compaction.
+
+Default:
+
+```json
+"compactionThreshold": 6000
+```
+
+A lower value triggers compaction more frequently. A higher value allows a larger active conversation before compaction.
+
+#### `compactionStrategy`
+
+Controls how Sky Code reduces older conversation material.
+
+Allowed values are:
+
+```text
+summarise
+sliding-window
+```
+
+Default:
+
+```json
+"compactionStrategy": "summarise"
+```
+
+The `summarise` strategy compresses older turns into a summary and drops stale tool output.
+
+The `sliding-window` strategy removes older turns and keeps only the most recent configured number.
+
+#### `compactionWindowSize`
+
+The number of recent turns retained when `compactionStrategy` is `sliding-window`.
+
+Default:
+
+```json
+"compactionWindowSize": 20
+```
+
+This setting is used only by the `sliding-window` strategy.
 
 ## MCP Server Configuration
 
@@ -460,6 +466,31 @@ Start Sky Code from any directory:
 sky
 ```
 
+Before displaying the normal chat prompt, Sky Code performs a silent startup health check.
+
+It verifies:
+
+- `LITELLM_API_URL` is configured
+- `LITELLM_API_KEY` is configured
+- The configured LiteLLM server is reachable
+
+When all checks pass, startup continues normally without an extra success message.
+
+If a check fails, Sky Code displays a plain-language explanation before the chat prompt appears. The message identifies the failed startup operation and explains what configuration or service should be checked.
+
+### Session Resume on Startup
+
+Sky Code associates session history with the directory where it was started.
+
+When a previous session exists for that directory, Sky Code asks whether to:
+
+1. Resume the previous conversation
+2. Start with a fresh conversation
+
+Choosing resume restores the reconstructed conversation messages into the active context.
+
+Choosing fresh starts with an empty active conversation.
+
 The startup display reports:
 
 - LiteLLM address
@@ -504,41 +535,319 @@ The change takes effect immediately for the current session.
 
 ### `/compact`
 
-Summarizes older conversation messages and reduces the active history.
+Runs manual context compaction using the configured compaction strategy.
 
-Sky Code:
-
-- Keeps the six most recent messages by default
-- Summarizes older messages using the active model
-- Replaces stale older tool output with an omission marker
-- Fires `PreCompact` before compaction
-- Fires `PostCompact` after compaction
-- Writes a `compaction` event to the session JSONL file
-- Restores the original active history if compaction fails
-
-Manual compaction requires at least two older messages beyond the retained recent messages.
-
-## Automatic Context Compaction
-
-Sky Code uses a simple Phase 2 token-pressure policy.
-
-Automatic compaction is considered when the active conversation reaches:
+Example:
 
 ```text
-24000 estimated tokens
+/compact
 ```
 
-The estimate uses approximately four characters per token. It is an internal trigger estimate, not a statement about the actual context limit of the active model.
+After compaction, Sky Code displays a one-line report showing how many turns were compacted and the estimated token reduction.
 
-Automatic compaction:
+If the conversation does not contain enough older material to compact, Sky Code reports that compaction was not needed and leaves the active history unchanged.
 
-- Uses the active model
-- Uses `reason: "token-pressure"`
-- Fires `PreCompact` and `PostCompact`
-- Records the result in the session JSONL file
-- Preserves the original history when compaction fails
+### `/tasks`
 
-Advanced model-aware compaction policies are deferred to Phase 3.
+Lists currently running background tasks.
+
+Example:
+
+```text
+/tasks
+```
+
+Each listed task includes an ID that can be used to cancel it.
+
+### `/tasks cancel <id>`
+
+Cancels a running background task by its ID.
+
+Example:
+
+```text
+/tasks cancel 7f9a2c
+```
+
+Replace `7f9a2c` with the ID displayed by `/tasks`.
+
+### `/catalog list`
+
+Displays all custom commands and skills. It also shows whether each skill is enabled or disabled for the current session.
+
+Example:
+
+```text
+/catalog list
+```
+
+### `/catalog add <file>`
+
+Imports one command or skill from a JSON file.
+
+Example:
+
+```text
+/catalog add ./review-command.json
+```
+
+The imported definition is stored under:
+
+```text
+~/.sky-code/catalog/
+```
+
+### `/catalog remove <name>`
+
+Removes a custom command or skill by name.
+
+Examples:
+
+```text
+/catalog remove /review-file
+/catalog remove careful-review
+```
+
+### `/catalog enable <name>`
+
+Enables a custom skill for the current session.
+
+Example:
+
+```text
+/catalog enable careful-review
+```
+
+The active system prompt is updated immediately. Sky Code does not need to restart.
+
+### `/catalog disable <name>`
+
+Disables a custom skill for the current session.
+
+Example:
+
+```text
+/catalog disable careful-review
+```
+
+The active system prompt is updated immediately.
+
+### `/history search <term>`
+
+Searches the current session JSONL log for matching turns.
+
+Example:
+
+```text
+/history search connection refused
+```
+
+Matching entries are displayed with timestamps in session order.
+
+## Background Tasks
+
+Long-running tasks can run without blocking the main chat prompt.
+
+While a background task is running:
+
+- The `You:` prompt remains available
+- Progress updates appear in the terminal
+- The task can complete, fail, or be cancelled
+- Started, progress, completed, failed, and cancelled events are recorded in the JSONL session log
+- The `Notification` hook fires when a task starts, completes, or fails
+
+If Sky Code closes while a background task is running, the task is cancelled cleanly and the cancellation is recorded.
+
+Use:
+
+```text
+/tasks
+```
+
+to list running tasks.
+
+Use:
+
+```text
+/tasks cancel <id>
+```
+
+to cancel one.
+
+## Configurable Context Compaction
+
+Sky Code can reduce a growing active conversation automatically or when `/compact` is entered.
+
+The compaction settings are stored in global or project `config.json`:
+
+```json
+{
+  "compactionThreshold": 6000,
+  "compactionStrategy": "summarise",
+  "compactionWindowSize": 20
+}
+```
+
+### `summarise` Strategy
+
+This is the default strategy.
+
+It:
+
+- Summarises older conversation turns
+- Keeps recent conversation material active
+- Drops stale older tool output
+- Preserves useful older context in compressed form
+
+This strategy is useful when earlier decisions and discussion may still matter.
+
+The trade-off is that it uses a model call to create the summary.
+
+### `sliding-window` Strategy
+
+This strategy keeps only the most recent configured number of turns.
+
+The number retained is controlled by:
+
+```json
+"compactionWindowSize": 20
+```
+
+This strategy is simple and predictable and does not need a model-generated summary.
+
+The trade-off is that turns outside the window are removed rather than preserved in summary form.
+
+### Automatic Compaction
+
+Automatic compaction is triggered when the estimated active conversation size exceeds:
+
+```json
+"compactionThreshold": 6000
+```
+
+The value is an estimated token count used as the trigger.
+
+Automatic and manual compaction:
+
+- Use the configured compaction strategy
+- Fire `PreCompact` before compaction
+- Fire `PostCompact` after successful compaction
+- Write a `compaction` event to the session JSONL file
+- Leave the original active history unchanged if compaction fails
+- Display a one-line report showing how many turns were compacted and the estimated token reduction
+
+## Custom Command and Skill Catalog
+
+Custom commands and skills are stored as individual JSON files under:
+
+```text
+~/.sky-code/catalog/
+```
+
+Catalog changes take effect immediately in the current session. Sky Code does not need to restart.
+
+Catalog commands and skills are also available through the plugin system so plugins can bundle them.
+
+### Custom Prompt Command
+
+A prompt command defines a slash command, a description, and a prompt template.
+
+Example:
+
+```json
+{
+  "type": "command",
+  "name": "/summarise",
+  "description": "Ask the AI to summarise the current file",
+  "prompt": "Please summarise the contents of {{file}} in plain language."
+}
+```
+
+Example use:
+
+```text
+/summarise ~/project/example.ts
+```
+
+### Custom Shell Command
+
+A shell command defines a slash command, a description, and a shell command to run.
+
+Example:
+
+```json
+{
+  "type": "command",
+  "name": "/project-status",
+  "description": "Show the current Git working-tree status",
+  "shell": "git status --short --branch"
+}
+```
+
+Catalog shell commands follow the active permission mode.
+
+### Custom Skill
+
+A skill adds reusable instructions to the system prompt when it is enabled.
+
+Example:
+
+```json
+{
+  "type": "skill",
+  "name": "python-style",
+  "description": "Apply Python style guidelines to all code suggestions",
+  "systemPromptAddition": "Always follow PEP 8 style guidelines when writing or editing Python code."
+}
+```
+
+Enable it for the current session:
+
+```text
+/catalog enable python-style
+```
+
+Disable it:
+
+```text
+/catalog disable python-style
+```
+
+Remove it from the catalog:
+
+```text
+/catalog remove python-style
+```
+
+## Session History Search
+
+Every user and assistant turn is written to the current private JSONL session log.
+
+Search the current session without opening the JSONL file manually:
+
+```text
+/history search <term>
+```
+
+Example:
+
+```text
+/history search build failed
+```
+
+Sky Code returns matching turns with their timestamps.
+
+## Cleaner Error Messages
+
+Sky Code reports startup, model, catalog, history, compaction, background-task, and shutdown failures in plain language.
+
+Instead of exposing raw internal error objects or full stack traces during normal CLI use, it reports:
+
+- Which operation failed
+- The safely extracted reason
+- A practical next step when one is available
+
+Credential-like values are removed from formatted error output.
 
 ## Local and Extended Tools
 
@@ -865,6 +1174,9 @@ These built-in commands are reserved:
 /model
 /permissions
 /compact
+/tasks
+/catalog
+/history
 ```
 
 Duplicate skill names or commands are rejected.
@@ -1056,6 +1368,8 @@ compaction
 session_end
 ```
 
+Background-task started, progress, completed, failed, and cancelled events are also recorded in the active session log.
+
 A compaction record may include:
 
 ```text
@@ -1088,7 +1402,15 @@ Display a session:
 cat ~/.sky-code/sessions/SESSION_FILENAME.jsonl
 ```
 
-Session logs may contain prompts, model responses, file contents, command output, MCP output, summaries, and errors. Treat them as private data.
+Search the current session from inside Sky Code:
+
+```text
+/history search <term>
+```
+
+If Sky Code finds a previous session for the directory where it starts, it offers to reconstruct and resume that conversation or begin a fresh one.
+
+Session logs may contain prompts, model responses, file contents, command output, MCP output, summaries, background-task progress, and errors. Treat them as private data.
 
 ## Automated Tests
 
@@ -1099,11 +1421,11 @@ cd ~/sky-code
 npm test
 ```
 
-The verified Phase 2 result is:
+The verified test result is:
 
 ```text
-Test Files  19 passed
-Tests       127 passed
+Test Files  49 passed
+Tests       289 passed
 ```
 
 The suite includes:
@@ -1113,10 +1435,17 @@ The suite includes:
 - Permission tests
 - Hook tests
 - Plugin tests
-- Compaction tests
-- Session tests
+- Background-task tests
+- Advanced compaction tests
+- Catalog loading and management tests
+- History-search tests
+- Session-resume tests
+- Startup-health tests
+- Error-reporting tests
 - Sub-agent worker tests
-- Integration tests using local MCP stdio, SSE, and Streamable HTTP fixtures
+- Integration tests
+- Live source-wiring tests
+- Local MCP stdio, SSE, and Streamable HTTP fixtures
 
 LiteLLM responses are mocked in automated tests. The tests do not expose or use the real LiteLLM API key.
 
@@ -1169,6 +1498,9 @@ npm run dev
 │   ├── fileops.ts
 │   ├── shell.ts
 │   ├── session.ts
+│   ├── session-resume.ts
+│   ├── session-resume-prompt.ts
+│   ├── history.ts
 │   ├── tools.ts
 │   ├── toolhandlers.ts
 │   ├── mcp.ts
@@ -1180,6 +1512,16 @@ npm run dev
 │   ├── compact.ts
 │   ├── compact-model.ts
 │   ├── compact-runtime.ts
+│   ├── background.ts
+│   ├── background-commands.ts
+│   ├── background-session.ts
+│   ├── background-terminal.ts
+│   ├── background-turn.ts
+│   ├── catalog.ts
+│   ├── catalog-management.ts
+│   ├── catalog-runtime.ts
+│   ├── startup-health.ts
+│   ├── error-reporting.ts
 │   └── utils.ts
 ├── config/
 │   └── defaults.json
@@ -1187,7 +1529,7 @@ npm run dev
 │   ├── fixtures/
 │   ├── basic.test.ts
 │   ├── integration.test.ts
-│   └── additional Phase 2 test files
+│   └── additional test files
 ├── .env
 ├── .env.example
 ├── .gitignore
@@ -1358,6 +1700,9 @@ Plugins cannot use:
 /model
 /permissions
 /compact
+/tasks
+/catalog
+/history
 ```
 
 Plugin names, skill names, skill commands, agent names, and MCP server names must be unique in their applicable scope.
@@ -1376,10 +1721,37 @@ Read the result text. No file, command, MCP call, or delegated task should execu
 
 ### Context Compaction Is Not Needed
 
-Manual compaction requires at least eight active messages with the default retention setting:
+Manual `/compact` may report that compaction is not needed.
 
-- Six recent messages are retained
-- At least two older messages must exist to summarize
+This can happen when:
+
+- The active conversation is still small
+- There are not enough older turns for the `summarise` strategy
+- The active history does not exceed `compactionWindowSize` when using `sliding-window`
+
+This is normal. Sky Code leaves the active conversation unchanged.
+
+Review the active global configuration:
+
+```bash
+cat ~/.sky-code/config.json
+```
+
+Also check for a project-specific configuration in the directory where Sky Code was started:
+
+```bash
+cat .sky-code/config.json
+```
+
+The relevant settings are:
+
+```json
+{
+  "compactionThreshold": 6000,
+  "compactionStrategy": "summarise",
+  "compactionWindowSize": 20
+}
+```
 
 ### TypeScript Build Fails
 
