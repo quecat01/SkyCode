@@ -31,10 +31,47 @@ import {
 } from "./agents.js";
 
 import {
+  BackgroundTaskRegistry,
+} from "./background.js";
+
+import {
+  createBackgroundTerminalReporter,
+} from "./background-terminal.js";
+
+import {
+  createBackgroundSessionReporter,
+} from "./background-session.js";
+
+import {
+  executeBackgroundTasksCommand,
+  parseBackgroundTasksCommand,
+} from "./background-commands.js";
+
+import {
+  shouldReturnToPromptAfterBackgroundTool,
+} from "./background-turn.js";
+
+import {
   fetchAvailableModels,
   streamChatCompletion,
   type ChatMessage,
 } from "./chat.js";
+
+import {
+  executeCatalogShellCommand,
+  resolveCatalogCommand,
+  selectEnabledCatalogSkills,
+  validateCatalogPluginConflicts,
+} from "./catalog-runtime.js";
+
+import {
+  CatalogManager,
+  parseCatalogManagementCommand,
+} from "./catalog-management.js";
+
+import {
+  loadCatalog,
+} from "./catalog.js";
 
 import {
   formatContextCompactionResult,
@@ -48,10 +85,20 @@ import {
 } from "./config.js";
 
 import {
+  formatCliErrorReport,
+} from "./error-reporting.js";
+
+import {
   executeSkyToolRequestWithHooks,
   HookRegistry,
   registerPluginHooks,
 } from "./hooks.js";
+
+import {
+  formatHistorySearchResults,
+  parseHistoryCommand,
+  searchSessionHistory,
+} from "./history.js";
 
 import {
   closeMcpConnections,
@@ -74,9 +121,27 @@ import {
 } from "./permissions.js";
 
 import {
+  redrawReadlinePrompt,
+  restoreReadlineRawMode,
+} from "./readline-redraw.js";
+
+import {
   createSessionLogger,
   type SessionLogger,
 } from "./session.js";
+
+import {
+  findLatestResumableSession,
+  type ResumableSession,
+} from "./session-resume.js";
+
+import {
+  promptForSessionResume,
+} from "./session-resume-prompt.js";
+
+import {
+  runStartupHealthCheck,
+} from "./startup-health.js";
 
 import {
   createSkyCodeToolHandlers,
@@ -95,6 +160,28 @@ import {
 } from "./utils.js";
 
 const MAX_TOOL_ROUNDS = 20;
+
+function printCliError(
+  error:
+    unknown,
+
+  operation:
+    string,
+): void {
+  for (
+    const line of
+    formatCliErrorReport(
+      error,
+      {
+        operation,
+      },
+    )
+  ) {
+    console.error(
+      line,
+    );
+  }
+}
 
 interface StreamedTurn {
   responseText: string;
@@ -242,8 +329,9 @@ async function selectModel(
         config,
       );
   } catch (error) {
-    console.error(
-      `Unable to retrieve models: ${formatError(error)}`,
+    printCliError(
+      error,
+      "Model list retrieval",
     );
 
     console.log(
@@ -542,6 +630,10 @@ async function completeConversationTurn(
         );
     } finally {
       readline.resume();
+
+      restoreReadlineRawMode(
+        input,
+      );
     }
 
     console.log(
@@ -570,6 +662,20 @@ async function completeConversationTurn(
       success:
         toolResult.success,
     });
+
+    if (
+      shouldReturnToPromptAfterBackgroundTool(
+        toolRequest,
+        toolResult,
+      )
+    ) {
+      console.log(
+        toolResult.output,
+      );
+
+      console.log();
+      return;
+    }
 
     messages.push({
       role: "user",
@@ -621,6 +727,10 @@ export async function runCli():
       workingDirectory,
     );
 
+  await runStartupHealthCheck(
+    config,
+  );
+
   const plugins =
     await loadPlugins({
       projectDirectory:
@@ -635,6 +745,35 @@ export async function runCli():
     mergePluginSkills(
       plugins,
     );
+
+  const initialCatalog =
+    await loadCatalog({
+      homeDirectory:
+        homedir(),
+    });
+
+  validateCatalogPluginConflicts(
+    initialCatalog,
+    pluginSkills,
+  );
+
+  const catalogManager =
+    new CatalogManager({
+      catalog:
+        initialCatalog,
+
+      pluginSkills,
+
+      workingDirectory,
+    });
+
+  let catalog =
+    catalogManager
+      .getSnapshot();
+
+  let activeCatalogSkills =
+    catalogManager
+      .getActiveSkills();
 
   const subAgents =
     mergePluginAgents(
@@ -655,6 +794,78 @@ export async function runCli():
       plugins,
       hookRegistry,
     );
+
+  let readlineForBackground:
+    ReadlineInterface | null =
+    null;
+
+  let promptActive =
+    false;
+
+  let assistantOutputActive =
+    false;
+
+  const backgroundTerminalReporter =
+    createBackgroundTerminalReporter({
+      output,
+      isPromptActive:
+        () =>
+          promptActive,
+      getCurrentInput:
+        () =>
+          readlineForBackground
+            ?.line ??
+          "",
+      redrawPrompt:
+        () => {
+          if (
+            readlineForBackground
+          ) {
+            redrawReadlinePrompt(
+              readlineForBackground,
+            );
+          }
+        },
+      isOutputActive:
+        () =>
+          assistantOutputActive,
+    });
+
+  let backgroundSessionReporter:
+    ReturnType<
+      typeof createBackgroundSessionReporter
+    > | null =
+    null;
+
+  const backgroundTaskRegistry =
+    new BackgroundTaskRegistry({
+      hookRegistry,
+      reporter:
+        async (
+          line,
+          task,
+          event,
+        ): Promise<void> => {
+          await backgroundTerminalReporter(
+            line,
+            task,
+            event,
+          );
+
+          const sessionReporter =
+            backgroundSessionReporter;
+
+          if (
+            sessionReporter
+          ) {
+            await sessionReporter(
+              line,
+              task,
+              event,
+            );
+          }
+        },
+    });
 
   let mcpConnections:
     McpConnection[] = [];
@@ -692,11 +903,12 @@ export async function runCli():
       config.defaultPermissionMode,
     );
 
-  const systemPrompt =
+  let systemPrompt =
     createSkyCodeSystemPrompt(
       mcpTools,
       pluginSkills,
       subAgents,
+      activeCatalogSkills,
     );
 
   const handlers =
@@ -721,7 +933,113 @@ export async function runCli():
             permissionController
               .getMode(),
       },
+      {
+        registry:
+          backgroundTaskRegistry,
+      },
     );
+
+  const readline =
+    createInterface({
+      input,
+      output,
+    });
+
+  readlineForBackground =
+    readline;
+
+  readline.setPrompt(
+    "You: ",
+  );
+
+  let resumableSession:
+    ResumableSession | null =
+    null;
+
+  try {
+    resumableSession =
+      await findLatestResumableSession(
+        workingDirectory,
+      );
+  } catch (error) {
+    printCliError(
+      error,
+      "Session history inspection",
+    );
+
+    console.log(
+      "Starting with a fresh conversation.",
+    );
+  }
+
+  const messages:
+    ChatMessage[] = [];
+
+
+  if (
+    resumableSession
+  ) {
+    try {
+      const resumeDecision =
+        await promptForSessionResume(
+          resumableSession,
+          {
+            question:
+              async (
+                prompt,
+              ) =>
+                readline.question(
+                  prompt,
+                ),
+
+            write:
+              (
+                line,
+              ) => {
+                console.log(
+                  line,
+                );
+              },
+          },
+        );
+
+      if (
+        resumeDecision ===
+          "resume"
+      ) {
+        for (
+          const message of
+          resumableSession.messages
+        ) {
+          messages.push({
+            role:
+              message.role,
+
+            content:
+              message.content,
+          });
+        }
+
+
+        console.log(
+          `Resumed ${messages.length} conversation messages from the previous session.`,
+        );
+      } else {
+        console.log(
+          "Starting with a fresh conversation.",
+        );
+      }
+    } catch (error) {
+      printCliError(
+        error,
+        "Session resume selection",
+      );
+
+      console.log(
+        "Starting with a fresh conversation.",
+      );
+    }
+  }
 
   let sessionLogger:
     SessionLogger;
@@ -730,6 +1048,11 @@ export async function runCli():
     sessionLogger =
       await createSessionLogger();
   } catch (error) {
+    readline.close();
+
+    readlineForBackground =
+      null;
+
     try {
       await closeMcpConnections(
         mcpConnections,
@@ -741,20 +1064,17 @@ export async function runCli():
     throw error;
   }
 
+  backgroundSessionReporter =
+    createBackgroundSessionReporter(
+      sessionLogger,
+    );
+
   await sessionLogger.append({
     type: "session_start",
+    workingDirectory,
     model:
-      config.defaultModel,
+      activeModel,
   });
-
-  const readline =
-    createInterface({
-      input,
-      output,
-    });
-
-  const messages:
-    ChatMessage[] = [];
 
   let shutdownRequested =
     false;
@@ -809,18 +1129,32 @@ export async function runCli():
 
     void (async () => {
       try {
+        await backgroundTaskRegistry
+          .cancelAll(
+            "Sky Code is closing.",
+          );
+      } catch (error) {
+        printCliError(
+          error,
+          "Background task cancellation",
+        );
+      }
+
+      try {
         await saveSessionEnd();
       } catch (error) {
-        console.error(
-          `Unable to save session end: ${formatError(error)}`,
+        printCliError(
+          error,
+          "Session log finalization",
         );
       }
 
       try {
         await closeMcpOnce();
       } catch (error) {
-        console.error(
-          `Unable to close MCP connections: ${formatError(error)}`,
+        printCliError(
+          error,
+          "MCP connection cleanup",
         );
       }
 
@@ -933,6 +1267,10 @@ export async function runCli():
   );
 
   console.log(
+    "Type /tasks to view background tasks or /tasks cancel <task-id> to cancel one.",
+  );
+
+  console.log(
     "Press Ctrl+C to close Sky Code.",
   );
 
@@ -943,6 +1281,9 @@ export async function runCli():
       let userInput: string;
 
       try {
+        promptActive =
+          true;
+
         userInput = (
           await readline.question(
             "You: ",
@@ -950,6 +1291,9 @@ export async function runCli():
         ).trim();
       } catch {
         break;
+      } finally {
+        promptActive =
+          false;
       }
 
       if (
@@ -996,10 +1340,9 @@ export async function runCli():
             sessionLogger,
           );
         } catch (error) {
-          console.error(
-            `Context compaction failed: ${formatError(
-              error,
-            )}`,
+          printCliError(
+            error,
+            "Context compaction",
           );
 
           console.log(
@@ -1012,6 +1355,186 @@ export async function runCli():
         continue;
       }
 
+      const backgroundTasksCommand =
+        parseBackgroundTasksCommand(
+          userInput,
+        );
+
+      if (
+        backgroundTasksCommand
+      ) {
+        console.log(
+          executeBackgroundTasksCommand(
+            backgroundTasksCommand,
+            backgroundTaskRegistry,
+          ),
+        );
+
+        console.log();
+
+        continue;
+      }
+
+      let historyCommand:
+        ReturnType<
+          typeof parseHistoryCommand
+        >;
+
+      try {
+        historyCommand =
+          parseHistoryCommand(
+            userInput,
+          );
+      } catch (error) {
+        printCliError(
+          error,
+          "History command",
+        );
+
+        console.log();
+
+        continue;
+      }
+
+      if (
+        historyCommand
+      ) {
+        try {
+          const matches =
+            await searchSessionHistory(
+              sessionLogger.filePath,
+              historyCommand.term,
+            );
+
+          console.log(
+            formatHistorySearchResults(
+              historyCommand.term,
+              matches,
+            ),
+          );
+        } catch (error) {
+          printCliError(
+            error,
+            "History search",
+          );
+        }
+
+        console.log();
+
+        continue;
+      }
+
+      let catalogManagementCommand:
+        ReturnType<
+          typeof parseCatalogManagementCommand
+        >;
+
+      try {
+        catalogManagementCommand =
+          parseCatalogManagementCommand(
+            userInput,
+          );
+      } catch (error) {
+        printCliError(
+          error,
+          "Catalog management command",
+        );
+
+        console.log();
+
+        continue;
+      }
+
+      if (
+        catalogManagementCommand
+      ) {
+        try {
+          const result =
+            await catalogManager
+              .execute(
+                catalogManagementCommand,
+              );
+
+          catalog =
+            result.catalog;
+
+          activeCatalogSkills =
+            result.activeSkills;
+
+          systemPrompt =
+            createSkyCodeSystemPrompt(
+              mcpTools,
+              pluginSkills,
+              subAgents,
+              activeCatalogSkills,
+            );
+
+          console.log(
+            result.message,
+          );
+        } catch (error) {
+          printCliError(
+            error,
+            "Catalog management command",
+          );
+        }
+
+        console.log();
+
+        continue;
+      }
+
+      let resolvedCatalogCommand:
+        ReturnType<
+          typeof resolveCatalogCommand
+        >;
+
+      try {
+        resolvedCatalogCommand =
+          resolveCatalogCommand(
+            userInput,
+            catalog.commands,
+          );
+      } catch (error) {
+        printCliError(
+          error,
+          "Catalog command",
+        );
+
+        console.log();
+
+        continue;
+      }
+
+      if (
+        resolvedCatalogCommand
+          ?.kind ===
+          "shell"
+      ) {
+        try {
+          const result =
+            await executeCatalogShellCommand(
+              resolvedCatalogCommand,
+              permissionController
+                .getMode(),
+              workingDirectory,
+            );
+
+          console.log(
+            result.output,
+          );
+        } catch (error) {
+          printCliError(
+            error,
+            "Catalog shell command",
+          );
+        }
+
+        console.log();
+
+        continue;
+      }
+
       const resolvedPluginCommand =
         resolvePluginSkillCommand(
           userInput,
@@ -1019,9 +1542,14 @@ export async function runCli():
         );
 
       const conversationInput =
-        resolvedPluginCommand
-          ?.conversationInput ??
-        userInput;
+        resolvedCatalogCommand
+          ?.kind ===
+          "prompt"
+          ? resolvedCatalogCommand
+              .conversationInput
+          : resolvedPluginCommand
+              ?.conversationInput ??
+            userInput;
 
       messages.push({
         role: "user",
@@ -1071,10 +1599,9 @@ export async function runCli():
           console.log();
         }
       } catch (error) {
-        console.error(
-          `Automatic context compaction failed: ${formatError(
-            error,
-          )}`,
+        printCliError(
+          error,
+          "Automatic context compaction",
         );
 
         console.log(
@@ -1083,6 +1610,9 @@ export async function runCli():
 
         console.log();
       }
+
+      assistantOutputActive =
+        true;
 
       output.write(
         "Sky Code: ",
@@ -1104,8 +1634,9 @@ export async function runCli():
           "\n",
         );
 
-        console.error(
-          `Request failed: ${formatError(error)}`,
+        printCliError(
+          error,
+          "Model request",
         );
 
         console.log(
@@ -1125,6 +1656,12 @@ export async function runCli():
         ) {
           messages.pop();
         }
+      } finally {
+        assistantOutputActive =
+          false;
+
+        await backgroundTerminalReporter
+          .flushPending();
       }
     }
   } finally {
@@ -1133,19 +1670,36 @@ export async function runCli():
       requestShutdown,
     );
 
+    promptActive =
+      false;
+
+    try {
+      await backgroundTaskRegistry
+        .cancelAll(
+          "Sky Code is closing.",
+        );
+    } catch (error) {
+      printCliError(
+        error,
+        "Background task cancellation",
+      );
+    }
+
     try {
       await saveSessionEnd();
     } catch (error) {
-      console.error(
-        `Unable to save session end: ${formatError(error)}`,
+      printCliError(
+        error,
+        "Session log finalization",
       );
     }
 
     try {
       await closeMcpOnce();
     } catch (error) {
-      console.error(
-        `Unable to close MCP connections: ${formatError(error)}`,
+      printCliError(
+        error,
+        "MCP connection cleanup",
       );
     }
 
@@ -1173,8 +1727,9 @@ if (
 ) {
   runCli().catch(
     (error: unknown) => {
-      console.error(
-        `Sky Code could not start: ${formatError(error)}`,
+      printCliError(
+        error,
+        "Sky Code startup",
       );
 
       process.exitCode = 1;

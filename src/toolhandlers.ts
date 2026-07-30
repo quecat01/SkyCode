@@ -1,3 +1,11 @@
+import type {
+  BackgroundTaskRegistry,
+} from "./background.js";
+
+import {
+  runBackgroundShellCommand,
+} from "./background-shell.js";
+
 import {
   runSubAgentTask,
   type ActiveSubAgentDefinition,
@@ -72,6 +80,11 @@ export interface ToolPermissionRuntime {
 
   approvalPrompt?:
     ApprovalPrompt;
+}
+
+export interface BackgroundToolRuntime {
+  registry:
+    BackgroundTaskRegistry;
 }
 
 const DEFAULT_PERMISSION_RUNTIME:
@@ -348,6 +361,8 @@ export function createSkyCodeToolHandlers(
   permissionRuntime:
     ToolPermissionRuntime =
       DEFAULT_PERMISSION_RUNTIME,
+  backgroundRuntime?:
+    BackgroundToolRuntime,
 ): ToolHandlers {
   const phase1Handlers =
     createPhase1ToolHandlers(
@@ -357,6 +372,120 @@ export function createSkyCodeToolHandlers(
 
   return {
     ...phase1Handlers,
+
+    async run_shell_command(
+      args:
+        RunShellCommandArgs,
+    ): Promise<ToolExecutionResult> {
+      if (
+        args.background !==
+          true
+      ) {
+        return phase1Handlers
+          .run_shell_command(
+            args,
+          );
+      }
+
+      const decision =
+        getPermissionDecision(
+          permissionRuntime
+            .getMode(),
+          "shell-command",
+        );
+
+      if (
+        decision ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "run_shell_command",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      if (
+        !backgroundRuntime
+      ) {
+        return failed(
+          "Background task support is not active in this Sky Code session.",
+        );
+      }
+
+      const approvalPrompt =
+        permissionRuntime
+          .approvalPrompt ??
+        confirmAction;
+
+      if (
+        decision ===
+          "prompt"
+      ) {
+        const approved =
+          await approvalPrompt(
+            [
+              "Allow Sky Code to run this command in the background?",
+              args.command,
+            ].join(
+              "\n",
+            ),
+          );
+
+        if (
+          !approved
+        ) {
+          return failed(
+            "Permission denied. Sky Code did not start the background command.",
+          );
+        }
+      }
+
+      const normalizedCommand =
+        args.command
+          .trim()
+          .replace(
+            /\s+/g,
+            " ",
+          );
+
+      const commandPreview =
+        normalizedCommand.length >
+          80
+          ? `${normalizedCommand.slice(
+              0,
+              77,
+            )}...`
+          : normalizedCommand;
+
+      const handle =
+        backgroundRuntime
+          .registry
+          .start(
+            `Shell: ${commandPreview}`,
+            async (
+              context,
+            ) =>
+              runBackgroundShellCommand(
+                args.command,
+                workingDirectory,
+                context,
+              ),
+          );
+
+      return succeeded(
+        [
+          "Background task started.",
+          `Task ID: ${handle.id}`,
+          `Command: ${args.command}`,
+        ].join(
+          "\n",
+        ),
+      );
+    },
 
     async mcp_call(
       args: McpCallArgs,

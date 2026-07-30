@@ -167,6 +167,12 @@ async function handleRequest(
         .defaultModel,
     defaultPermissionMode:
       "default",
+    compactionThreshold:
+      6_000,
+    compactionStrategy:
+      "summarise",
+    compactionWindowSize:
+      20,
     mcpServers: [],
     pluginDirs: [],
   };

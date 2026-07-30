@@ -15,6 +15,14 @@ export const PERMISSION_MODES = [
 export type PermissionMode =
   (typeof PERMISSION_MODES)[number];
 
+export const COMPACTION_STRATEGIES = [
+  "summarise",
+  "sliding-window",
+] as const;
+
+export type CompactionStrategy =
+  (typeof COMPACTION_STRATEGIES)[number];
+
 export type McpTransport =
   | "stdio"
   | "sse"
@@ -52,6 +60,9 @@ export interface StoredConfig {
   apiUrl?: string;
   defaultModel?: string;
   defaultPermissionMode?: PermissionMode;
+  compactionThreshold?: unknown;
+  compactionStrategy?: unknown;
+  compactionWindowSize?: unknown;
   mcpServers?: unknown;
   pluginDirs?: unknown;
 }
@@ -61,6 +72,9 @@ export interface AppConfig {
   apiKey: string;
   defaultModel: string;
   defaultPermissionMode: PermissionMode;
+  compactionThreshold: number;
+  compactionStrategy: CompactionStrategy;
+  compactionWindowSize: number;
   mcpServers: McpServerConfig[];
   pluginDirs: string[];
 }
@@ -567,6 +581,55 @@ export function validatePermissionMode(
   return value;
 }
 
+function validatePositiveWholeNumber(
+  value: unknown,
+  name: string,
+): number {
+  if (
+    typeof value !==
+      "number" ||
+    !Number.isSafeInteger(
+      value,
+    ) ||
+    value < 1
+  ) {
+    throw new Error(
+      `${name} must be a positive whole number`,
+    );
+  }
+
+  return value;
+}
+
+export function isCompactionStrategy(
+  value: unknown,
+): value is CompactionStrategy {
+  return (
+    typeof value ===
+      "string" &&
+    COMPACTION_STRATEGIES.includes(
+      value as
+        CompactionStrategy,
+    )
+  );
+}
+
+export function validateCompactionStrategy(
+  value: unknown,
+): CompactionStrategy {
+  if (
+    !isCompactionStrategy(
+      value,
+    )
+  ) {
+    throw new Error(
+      'compactionStrategy must be either "summarise" or "sliding-window"',
+    );
+  }
+
+  return value;
+}
+
 export async function loadConfig(
   projectDirectory: string =
     process.cwd(),
@@ -643,6 +706,23 @@ export async function loadConfig(
     defaultPermissionMode:
       validatePermissionMode(
         defaultPermissionMode,
+      ),
+    compactionThreshold:
+      validatePositiveWholeNumber(
+        mergedConfig
+          .compactionThreshold,
+        "compactionThreshold",
+      ),
+    compactionStrategy:
+      validateCompactionStrategy(
+        mergedConfig
+          .compactionStrategy,
+      ),
+    compactionWindowSize:
+      validatePositiveWholeNumber(
+        mergedConfig
+          .compactionWindowSize,
+        "compactionWindowSize",
       ),
     mcpServers:
       validateMcpServerConfigs(

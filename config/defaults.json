@@ -3,5 +3,8 @@
   "defaultModel": "chatgpt-gpt-5.5",
   "defaultPermissionMode": "default",
   "mcpServers": [],
-  "pluginDirs": []
+  "pluginDirs": [],
+  "compactionThreshold": 6000,
+  "compactionStrategy": "summarise",
+  "compactionWindowSize": 20
 }

@@ -20,7 +20,8 @@ export type SessionEventType =
   | "message"
   | "tool_result"
   | "compaction"
-  | "session_end";
+  | "session_end"
+  | "background_task";
 
 export type SessionRole =
   | "user"
@@ -38,10 +39,50 @@ export interface SessionRecord {
   type:
     SessionEventType;
 
+
+  backgroundEvent?:
+    | "started"
+    | "progress"
+    | "completed"
+    | "failed"
+    | "cancelled";
+
+  taskId?:
+    string;
+
+  taskLabel?:
+    string;
+
+  taskStatus?:
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
+
+  taskStartedAt?:
+    string;
+
+  taskUpdatedAt?:
+    string;
+
+  taskCompletedAt?:
+    string;
+
+  progressMessage?:
+    string;
+
+  error?:
+    string;
+
+  cancellationReason?:
+    string;
   role?:
     SessionRole;
 
   content?:
+    string;
+
+  workingDirectory?:
     string;
 
   model?:
@@ -64,6 +105,18 @@ export interface SessionRecord {
 
   estimatedTokens?:
     number;
+
+  estimatedTokensAfter?:
+    number;
+
+  estimatedTokenReduction?:
+    number;
+
+  compactedTurnCount?:
+    number;
+
+  strategy?:
+    string;
 
   droppedToolOutputCount?:
     number;

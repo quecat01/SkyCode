@@ -66,6 +66,9 @@ const testConfig: AppConfig = {
   apiKey: "temporary-test-key",
   defaultModel: "test-model",
   defaultPermissionMode: "default",
+  compactionThreshold: 6_000,
+  compactionStrategy: "summarise",
+  compactionWindowSize: 20,
   mcpServers: [],
   pluginDirs: [],
 };
@@ -360,6 +363,12 @@ describe("Configuration integration", () => {
         "project-model",
       defaultPermissionMode:
         "default",
+      compactionThreshold:
+        6_000,
+      compactionStrategy:
+        "summarise",
+      compactionWindowSize:
+        20,
       mcpServers: [
         {
           name:
@@ -1251,6 +1260,458 @@ describe(
           context:
             "Return the delegated values.",
         });
+      },
+    );
+  },
+);
+
+describe(
+  "Phase 3 integration",
+  () => {
+    it(
+      "persists, searches, and resumes a directory-specific session",
+      async () => {
+        const rootDirectory =
+          await mkdtemp(
+            join(
+              tmpdir(),
+              "sky-code-phase3-session-integration-",
+            ),
+          );
+
+        try {
+          const projectDirectory =
+            join(
+              rootDirectory,
+              "project",
+            );
+
+          const sessionDirectory =
+            join(
+              rootDirectory,
+              "sessions",
+            );
+
+          await mkdir(
+            projectDirectory,
+            {
+              recursive:
+                true,
+            },
+          );
+
+          const {
+            createSessionLogger:
+              createPhase3SessionLogger,
+          } =
+            await import(
+              "../src/session.ts"
+            );
+
+          const {
+            searchSessionHistory,
+          } =
+            await import(
+              "../src/history.ts"
+            );
+
+          const {
+            findLatestResumableSession,
+          } =
+            await import(
+              "../src/session-resume.ts"
+            );
+
+          const logger =
+            await createPhase3SessionLogger(
+              sessionDirectory,
+            );
+
+          await logger.append({
+            type:
+              "session_start",
+
+            workingDirectory:
+              projectDirectory,
+
+            model:
+              "phase3-model",
+          });
+
+          await logger.append({
+            type:
+              "message",
+
+            role:
+              "user",
+
+            content:
+              "Remember the Phase 3 codeword ORANGE-728.",
+
+            model:
+              "phase3-model",
+          });
+
+          await logger.append({
+            type:
+              "message",
+
+            role:
+              "assistant",
+
+            content:
+              "The codeword is ORANGE-728.",
+
+            model:
+              "phase3-model",
+          });
+
+          await logger.append({
+            type:
+              "session_end",
+
+            model:
+              "phase3-model",
+          });
+
+          const matches =
+            await searchSessionHistory(
+              logger.filePath,
+              "orange-728",
+            );
+
+          expect(
+            matches.map(
+              (
+                match,
+              ) =>
+                match.role,
+            ),
+          ).toEqual([
+            "user",
+            "assistant",
+          ]);
+
+          const resumable =
+            await findLatestResumableSession(
+              projectDirectory,
+              sessionDirectory,
+            );
+
+          expect(
+            resumable,
+          ).not.toBeNull();
+
+          expect(
+            resumable?.model,
+          ).toBe(
+            "phase3-model",
+          );
+
+          expect(
+            resumable?.messages,
+          ).toEqual([
+            {
+              role:
+                "user",
+
+              content:
+                "Remember the Phase 3 codeword ORANGE-728.",
+            },
+            {
+              role:
+                "assistant",
+
+              content:
+                "The codeword is ORANGE-728.",
+            },
+          ]);
+        } finally {
+          await rm(
+            rootDirectory,
+            {
+              recursive:
+                true,
+
+              force:
+                true,
+            },
+          );
+        }
+      },
+    );
+
+    it(
+      "adds and activates catalog commands and skills without restarting",
+      async () => {
+        const rootDirectory =
+          await mkdtemp(
+            join(
+              tmpdir(),
+              "sky-code-phase3-catalog-integration-",
+            ),
+          );
+
+        try {
+          const projectDirectory =
+            join(
+              rootDirectory,
+              "project",
+            );
+
+          const catalogDirectory =
+            join(
+              rootDirectory,
+              "catalog",
+            );
+
+          await mkdir(
+            projectDirectory,
+            {
+              recursive:
+                true,
+            },
+          );
+
+          await writeFile(
+            join(
+              projectDirectory,
+              "phase3-review.json",
+            ),
+            JSON.stringify(
+              {
+                type:
+                  "command",
+
+                name:
+                  "/phase3-review",
+
+                description:
+                  "Review a Phase 3 file",
+
+                prompt:
+                  "Review {{file}} carefully.",
+              },
+              null,
+              2,
+            ),
+            "utf8",
+          );
+
+          await writeFile(
+            join(
+              projectDirectory,
+              "phase3-careful.json",
+            ),
+            JSON.stringify(
+              {
+                type:
+                  "skill",
+
+                name:
+                  "phase3-careful",
+
+                description:
+                  "Apply careful Phase 3 reasoning",
+
+                systemPromptAddition:
+                  "Verify every Phase 3 conclusion.",
+              },
+              null,
+              2,
+            ),
+            "utf8",
+          );
+
+          const {
+            loadCatalog,
+          } =
+            await import(
+              "../src/catalog.ts"
+            );
+
+          const {
+            CatalogManager,
+          } =
+            await import(
+              "../src/catalog-management.ts"
+            );
+
+          const {
+            resolveCatalogCommand,
+          } =
+            await import(
+              "../src/catalog-runtime.ts"
+            );
+
+          const {
+            createSkyCodeSystemPrompt,
+          } =
+            await import(
+              "../src/tools.ts"
+            );
+
+          const catalog =
+            await loadCatalog({
+              catalogDirectory,
+            });
+
+          const manager =
+            new CatalogManager({
+              catalog,
+
+              workingDirectory:
+                projectDirectory,
+            });
+
+          await manager.execute({
+            action:
+              "add",
+
+            file:
+              "./phase3-review.json",
+          });
+
+          await manager.execute({
+            action:
+              "add",
+
+            file:
+              "./phase3-careful.json",
+          });
+
+          const enabled =
+            await manager.execute({
+              action:
+                "enable",
+
+              name:
+                "phase3-careful",
+            });
+
+          const resolved =
+            resolveCatalogCommand(
+              "/phase3-review src/index.ts",
+              enabled.catalog.commands,
+            );
+
+          expect(
+            resolved,
+          ).toMatchObject({
+            kind:
+              "prompt",
+
+            conversationInput:
+              "Review src/index.ts carefully.",
+          });
+
+          const systemPrompt =
+            createSkyCodeSystemPrompt(
+              [],
+              [],
+              [],
+              enabled.activeSkills,
+            );
+
+          expect(
+            systemPrompt,
+          ).toContain(
+            "Verify every Phase 3 conclusion.",
+          );
+        } finally {
+          await rm(
+            rootDirectory,
+            {
+              recursive:
+                true,
+
+              force:
+                true,
+            },
+          );
+        }
+      },
+    );
+
+    it(
+      "passes startup health failures through clean credential-safe reporting",
+      async () => {
+        const {
+          runStartupHealthCheck,
+        } =
+          await import(
+            "../src/startup-health.ts"
+          );
+
+        const {
+          formatCliErrorReport,
+        } =
+          await import(
+            "../src/error-reporting.ts"
+          );
+
+        const secretKey =
+          "phase3-integration-secret";
+
+        let startupError:
+          unknown;
+
+        try {
+          await runStartupHealthCheck(
+            {
+              ...testConfig,
+
+              apiUrl:
+                "http://phase3-unreachable.test/v1",
+
+              apiKey:
+                secretKey,
+            },
+            async () => {
+              throw new TypeError(
+                `fetch failed with Bearer ${secretKey}`,
+              );
+            },
+          );
+        } catch (error) {
+          startupError =
+            error;
+        }
+
+        expect(
+          startupError,
+        ).toBeDefined();
+
+        const report =
+          formatCliErrorReport(
+            startupError,
+            {
+              operation:
+                "Sky Code startup",
+            },
+          );
+
+        expect(
+          report[0],
+        ).toBe(
+          "Sky Code startup failed.",
+        );
+
+        expect(
+          report.join(
+            "\n",
+          ),
+        ).toContain(
+          "could not reach LiteLLM",
+        );
+
+        expect(
+          report.join(
+            "\n",
+          ),
+        ).not.toContain(
+          secretKey,
+        );
       },
     );
   },

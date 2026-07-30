@@ -47,12 +47,12 @@ describe(
   "automatic context compaction policy",
   () => {
     it(
-      "uses the simple Phase 2 threshold of 24000 estimated tokens",
+      "uses the Phase 3 default threshold of 6000 estimated tokens",
       () => {
         expect(
           DEFAULT_AUTO_COMPACT_TOKEN_THRESHOLD,
         ).toBe(
-          24_000,
+          6_000,
         );
       },
     );

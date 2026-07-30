@@ -905,3 +905,228 @@ describe(
     );
   },
 );
+
+describe(
+  "Phase 3 core behavior",
+  () => {
+    it(
+      "resolves a catalog prompt command with supplied arguments",
+      async () => {
+        const {
+          resolveCatalogCommand,
+        } =
+          await import(
+            "../src/catalog-runtime.ts"
+          );
+
+        const resolved =
+          resolveCatalogCommand(
+            "/phase3-review src/index.ts",
+            [
+              {
+                type:
+                  "command",
+
+                name:
+                  "/phase3-review",
+
+                description:
+                  "Review a source file",
+
+                prompt:
+                  "Review {{file}} carefully.",
+
+                source:
+                  "catalog",
+
+                filePath:
+                  "/tmp/phase3-review.json",
+              },
+            ],
+          );
+
+        expect(
+          resolved,
+        ).toMatchObject({
+          kind:
+            "prompt",
+
+          commandArguments:
+            "src/index.ts",
+
+          conversationInput:
+            "Review src/index.ts carefully.",
+        });
+      },
+    );
+
+    it(
+      "parses catalog management and history commands",
+      async () => {
+        const {
+          parseCatalogManagementCommand,
+        } =
+          await import(
+            "../src/catalog-management.ts"
+          );
+
+        const {
+          parseHistoryCommand,
+        } =
+          await import(
+            "../src/history.ts"
+          );
+
+        expect(
+          parseCatalogManagementCommand(
+            "/catalog enable careful-review",
+          ),
+        ).toEqual({
+          action:
+            "enable",
+
+          name:
+            "careful-review",
+        });
+
+        expect(
+          parseHistoryCommand(
+            "/history search exact codeword",
+          ),
+        ).toEqual({
+          action:
+            "search",
+
+          term:
+            "exact codeword",
+        });
+      },
+    );
+
+    it(
+      "recognizes resume, fresh, and default session choices",
+      async () => {
+        const {
+          parseSessionResumeSelection,
+        } =
+          await import(
+            "../src/session-resume-prompt.ts"
+          );
+
+        expect(
+          parseSessionResumeSelection(
+            "1",
+          ),
+        ).toBe(
+          "resume",
+        );
+
+        expect(
+          parseSessionResumeSelection(
+            "2",
+          ),
+        ).toBe(
+          "fresh",
+        );
+
+        expect(
+          parseSessionResumeSelection(
+            "",
+          ),
+        ).toBe(
+          "fresh",
+        );
+      },
+    );
+
+    it(
+      "accepts a healthy LiteLLM model list at startup",
+      async () => {
+        const {
+          runStartupHealthCheck,
+        } =
+          await import(
+            "../src/startup-health.ts"
+          );
+
+        await expect(
+          runStartupHealthCheck(
+            {
+              apiUrl:
+                "http://litellm.test/v1",
+
+              apiKey:
+                "temporary-phase3-key",
+
+              defaultModel:
+                "phase3-model",
+
+              defaultPermissionMode:
+                "default",
+
+              compactionThreshold:
+                6_000,
+
+              compactionStrategy:
+                "summarise",
+
+              compactionWindowSize:
+                20,
+
+              mcpServers: [],
+
+              pluginDirs: [],
+            },
+            async () => [
+              "phase3-model",
+            ],
+          ),
+        ).resolves.toEqual({
+          defaultModel:
+            "phase3-model",
+
+          models: [
+            "phase3-model",
+          ],
+        });
+      },
+    );
+
+    it(
+      "formats actionable errors without exposing credentials",
+      async () => {
+        const {
+          formatCliErrorReport,
+        } =
+          await import(
+            "../src/error-reporting.ts"
+          );
+
+        const report =
+          formatCliErrorReport(
+            new Error(
+              "LITELLM_API_KEY=phase3-secret-key",
+            ),
+            {
+              operation:
+                "Phase 3 validation",
+            },
+          );
+
+        expect(
+          report[0],
+        ).toBe(
+          "Phase 3 validation failed.",
+        );
+
+        expect(
+          report.join(
+            "\n",
+          ),
+        ).not.toContain(
+          "phase3-secret-key",
+        );
+      },
+    );
+  },
+);

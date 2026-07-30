@@ -3,6 +3,14 @@ import {
   type ActiveSubAgentDefinition,
 } from "./agents.js";
 
+import {
+  formatCatalogSkillsForPrompt,
+} from "./catalog-runtime.js";
+
+import type {
+  CatalogSkill,
+} from "./catalog.js";
+
 import type {
   McpToolDefinition,
 } from "./mcp.js";
@@ -41,6 +49,7 @@ export interface EditFileArgs {
 
 export interface RunShellCommandArgs {
   command: string;
+  background?: boolean;
 }
 
 export interface McpCallArgs {
@@ -120,6 +129,8 @@ export function createSkyCodeSystemPrompt(
     readonly ActivePluginSkill[] = [],
   subAgents:
     readonly ActiveSubAgentDefinition[] = [],
+  catalogSkills:
+    readonly CatalogSkill[] = [],
 ): string {
   return [
     "You are Sky Code, an AI-powered CLI coding assistant.",
@@ -129,7 +140,7 @@ export function createSkyCodeSystemPrompt(
     "- read_file(path): Read the contents of a file",
     "- write_file(path, content): Write or create a file with the given content",
     "- edit_file(path, old_str, new_str): Replace old_str with new_str in a file",
-    "- run_shell_command(command): Run a shell command",
+    "- run_shell_command(command, background?): Run a shell command; set background to true for a long-running command that should not block the interactive prompt",
     "",
     "Connected MCP tools are called through:",
     "- mcp_call(server, name, arguments): Call a tool exposed by a connected MCP server",
@@ -144,6 +155,9 @@ export function createSkyCodeSystemPrompt(
     ),
     ...formatPluginSkillsForPrompt(
       pluginSkills,
+    ),
+    ...formatCatalogSkillsForPrompt(
+      catalogSkills,
     ),
     "",
     "When you want to use a tool, respond with ONLY a fenced code block tagged sky-tool containing a JSON object with \"tool\" and \"args\" keys.",
@@ -370,7 +384,21 @@ export function parseSkyToolRequest(
         },
       };
 
-    case "run_shell_command":
+    case "run_shell_command": {
+      const background =
+        args.background;
+
+      if (
+        background !==
+          undefined &&
+        typeof background !==
+          "boolean"
+      ) {
+        throw new Error(
+          'Tool argument "background" must be a boolean',
+        );
+      }
+
       return {
         tool,
         args: {
@@ -379,8 +407,15 @@ export function parseSkyToolRequest(
               args,
               "command",
             ),
+          ...(background ===
+            undefined
+            ? {}
+            : {
+                background,
+              }),
         },
       };
+    }
 
     case "mcp_call":
       return {

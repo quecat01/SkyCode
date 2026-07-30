@@ -17,6 +17,7 @@ import {
 
 import type {
   AppConfig,
+  CompactionStrategy,
 } from "./config.js";
 
 import type {
@@ -46,6 +47,9 @@ export interface RunContextCompactionOptions {
   sessionLogger:
     SessionLogger;
 
+  strategy?:
+    CompactionStrategy;
+
   keepRecentMessages?:
     number;
 
@@ -54,11 +58,12 @@ export interface RunContextCompactionOptions {
 }
 
 export const DEFAULT_AUTO_COMPACT_TOKEN_THRESHOLD =
-  24_000;
+  6_000;
 
 function validatePositiveWholeNumber(
   value:
     number,
+
   fieldName:
     string,
 ): number {
@@ -79,9 +84,11 @@ function validatePositiveWholeNumber(
 export function shouldAutoCompactContext(
   messages:
     readonly ChatMessage[],
+
   tokenThreshold:
     number =
       DEFAULT_AUTO_COMPACT_TOKEN_THRESHOLD,
+
   keepRecentMessages:
     number =
       DEFAULT_RECENT_MESSAGE_COUNT,
@@ -133,6 +140,9 @@ export interface RunAutomaticContextCompactionOptions {
   sessionLogger:
     SessionLogger;
 
+  strategy?:
+    CompactionStrategy;
+
   tokenThreshold?:
     number;
 
@@ -147,11 +157,29 @@ export async function runAutomaticContextCompaction(
   options:
     RunAutomaticContextCompactionOptions,
 ): Promise<CompactionResult | null> {
+  const tokenThreshold =
+    options.tokenThreshold ??
+    options.config
+      .compactionThreshold ??
+    DEFAULT_AUTO_COMPACT_TOKEN_THRESHOLD;
+
+  const keepRecentMessages =
+    options.keepRecentMessages ??
+    options.config
+      .compactionWindowSize ??
+    DEFAULT_RECENT_MESSAGE_COUNT;
+
+  const strategy =
+    options.strategy ??
+    options.config
+      .compactionStrategy ??
+    "summarise";
+
   if (
     !shouldAutoCompactContext(
       options.messages,
-      options.tokenThreshold,
-      options.keepRecentMessages,
+      tokenThreshold,
+      keepRecentMessages,
     )
   ) {
     return null;
@@ -160,18 +188,26 @@ export async function runAutomaticContextCompaction(
   return runContextCompaction({
     config:
       options.config,
+
     model:
       options.model,
+
     messages:
       options.messages,
+
     reason:
       "token-pressure",
+
     hookRegistry:
       options.hookRegistry,
+
     sessionLogger:
       options.sessionLogger,
-    keepRecentMessages:
-      options.keepRecentMessages,
+
+    strategy,
+
+    keepRecentMessages,
+
     summarize:
       options.summarize,
   });
@@ -187,6 +223,7 @@ function cloneMessages(
     ) => ({
       role:
         message.role,
+
       content:
         message.content,
     }),
@@ -196,6 +233,7 @@ function cloneMessages(
 function restoreMessages(
   messages:
     ChatMessage[],
+
   originalMessages:
     readonly ChatMessage[],
 ): void {
@@ -217,6 +255,18 @@ export async function runContextCompaction(
       options.messages,
     );
 
+  const strategy =
+    options.strategy ??
+    options.config
+      .compactionStrategy ??
+    "summarise";
+
+  const keepRecentMessages =
+    options.keepRecentMessages ??
+    options.config
+      .compactionWindowSize ??
+    DEFAULT_RECENT_MESSAGE_COUNT;
+
   const summarize =
     options.summarize ??
     (
@@ -236,11 +286,15 @@ export async function runContextCompaction(
       {
         reason:
           options.reason,
+
+        strategy,
+
         summarize,
+
         hookRegistry:
           options.hookRegistry,
-        keepRecentMessages:
-          options.keepRecentMessages,
+
+        keepRecentMessages,
       },
     );
 
@@ -256,18 +310,42 @@ export async function runContextCompaction(
       .append({
         type:
           "compaction",
+
         model:
           options.model,
+
         reason:
           result.reason,
+
         beforeMessageCount:
           result.beforeMessageCount,
+
         afterMessageCount:
           result.afterMessageCount,
+
         estimatedTokens:
           result.estimatedTokensBefore,
+
         droppedToolOutputCount:
           result.droppedToolOutputCount,
+
+        ...(result.strategy ===
+          "sliding-window"
+          ? {
+              strategy:
+                result.strategy,
+
+              compactedTurnCount:
+                result.compactedTurnCount,
+
+              estimatedTokensAfter:
+                result.estimatedTokensAfter,
+
+              estimatedTokenReduction:
+                result.estimatedTokenReduction,
+            }
+          : {}),
+
         summary:
           result.summary,
       });
@@ -305,10 +383,34 @@ export function formatContextCompactionResult(
     ];
   }
 
-  return [
+  const lines = [
     "Context compacted successfully.",
     `Messages: ${result.beforeMessageCount} -> ${result.afterMessageCount}`,
     `Estimated tokens before compaction: ${result.estimatedTokensBefore}`,
     `Stale tool outputs omitted: ${result.droppedToolOutputCount}`,
   ];
+
+  if (
+    result.compactedTurnCount !==
+      undefined &&
+    result.estimatedTokensAfter !==
+      undefined &&
+    result.estimatedTokenReduction !==
+      undefined
+  ) {
+    lines.splice(
+      1,
+      0,
+      [
+        "Compaction report:",
+        `${result.compactedTurnCount} turns compacted using ${result.strategy ?? "summarise"};`,
+        `estimated token reduction ${result.estimatedTokenReduction}`,
+        `(${result.estimatedTokensBefore} -> ${result.estimatedTokensAfter}).`,
+      ].join(
+        " ",
+      ),
+    );
+  }
+
+  return lines;
 }
