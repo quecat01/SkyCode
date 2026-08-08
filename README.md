@@ -1,8 +1,10 @@
 # Sky Code
 
-Sky Code is an interactive command-line AI coding assistant for Linux.
+Sky Code is an interactive command-line AI coding assistant for Linux, designed for developers who want AI-assisted coding directly in the terminal.
 
-It connects to a LiteLLM server through the OpenAI-compatible API and supports:
+Sky Code requires Node.js 20 or newer and works with LiteLLM or any OpenAI-compatible API endpoint, including self-hosted LiteLLM, Ollama, OpenAI directly, and OpenRouter.
+
+It supports:
 
 - Streamed AI conversations
 - Live model selection
@@ -32,37 +34,32 @@ sky
 
 The internal package, repository, and project-folder name is `sky-code`.
 
-## Verified Environment
+## Requirements and Tested Platforms
 
-This build was verified using:
+Sky Code requires:
 
-```text
-Operating system: DietPi on Debian
-User: sky
-Project: ~/sky-code
-Node.js: 24.18.0
-npm: 11.16.0
-LiteLLM: http://YOUR_LITELLM_HOST:4000/v1
-Default model: chatgpt-gpt-5.5
-Session directory: ~/.sky-code/sessions/
-```
+- Linux
+- Node.js 20 or newer
+- npm
+- LiteLLM or another OpenAI-compatible API endpoint
+- An API key when required by the configured endpoint
 
-Sky Code requires Node.js 20 or newer.
+Sky Code has been tested on DietPi, a Debian-based Linux distribution.
 
-## Install Prerequisites on DietPi
+## Install Prerequisites on Linux
 
-Install the required system packages:
+On Debian and Debian-based Linux distributions, install the required system packages:
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential git curl
 ```
 
-Do not install Node.js from NodeSource on this DietPi system.
+Install Node.js 20 or newer using a supported method for your Linux distribution.
 
-### Preferred Node.js Installation
+### Optional DietPi Note
 
-Open DietPi Software:
+On DietPi, Node.js can also be installed through DietPi Software:
 
 ```bash
 sudo dietpi-software
@@ -131,7 +128,7 @@ It must contain:
 
 ```dotenv
 LITELLM_API_URL=http://YOUR_LITELLM_HOST:4000/v1
-LITELLM_API_KEY=your_actual_litellm_key
+LITELLM_API_KEY=your_api_key_here
 ```
 
 Build the TypeScript source:
@@ -1591,39 +1588,36 @@ Bypass mode removes the approval protection.
 
 ### Network Risk
 
-The current LiteLLM address uses unencrypted HTTP on the local network.
+If your configured LiteLLM or MCP endpoint uses plain HTTP, use it only on a trusted private network.
 
-Do not expose the LiteLLM or MCP ports directly to an untrusted network.
+For connections over an untrusted network, use TLS (`https://`) directly on the endpoint or through a trusted reverse proxy.
 
-For wider access, use controls such as:
+Do not expose LiteLLM or MCP ports directly to an untrusted network.
+
+Additional controls can include:
 
 - Firewall restrictions
 - A private VPN
-- TLS through a trusted reverse proxy
 - Scoped API keys
 
 ## Troubleshooting
 
-### Sky Code Reads `/root/.sky-code/config.json`
+### Sky Code Reads Configuration from the Wrong Home Directory
 
 Confirm the active user and home directory:
 
 ```bash
 whoami
+printf 'USER=%s\n' "$USER"
 printf 'HOME=%s\n' "$HOME"
 pwd
 ```
 
-Expected user:
+Sky Code should run under the non-root Linux account that owns the installation. For example:
 
 ```text
-sky
-```
-
-Expected home:
-
-```text
-/home/sky
+USER=your-username
+HOME=/home/your-username
 ```
 
 Do not run Sky Code from a root login shell.
