@@ -6,6 +6,7 @@ Sky Code requires Node.js 20 or newer and works with LiteLLM or any OpenAI-compa
 
 It supports:
 
+- Interactive first-time setup wizard
 - Streamed AI conversations
 - Live model selection
 - File reading, writing, and editing
@@ -99,9 +100,10 @@ command -v node
 
 ## Install Sky Code
 
-Go to the project directory:
+Clone the repository:
 
 ```bash
+git clone https://github.com/quecat01/SkyCode ~/sky-code
 cd ~/sky-code
 ```
 
@@ -109,26 +111,6 @@ Install the npm packages:
 
 ```bash
 npm install
-```
-
-Create the private environment file:
-
-```bash
-cp .env.example .env
-chmod 600 .env
-```
-
-Edit it:
-
-```bash
-nano ~/sky-code/.env
-```
-
-It must contain:
-
-```dotenv
-LITELLM_API_URL=http://YOUR_LITELLM_HOST:4000/v1
-LITELLM_API_KEY=your_api_key_here
 ```
 
 Build the TypeScript source:
@@ -143,12 +125,43 @@ Expose the global `sky` command:
 npm link
 ```
 
-Verify it:
+Run the setup wizard to configure your endpoint, API key, default model, and permission mode:
 
 ```bash
-command -v sky
+sky setup
+```
+
+The wizard will guide you through each step, test the connection to your AI endpoint, and write your configuration automatically. When setup is complete, start Sky Code with:
+
+```bash
 sky
 ```
+
+### Manual Configuration (Alternative to `sky setup`)
+
+If you prefer to configure Sky Code manually instead of using the wizard, create the environment file:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+nano ~/sky-code/.env
+```
+
+It must contain:
+
+```dotenv
+LITELLM_API_URL=http://YOUR_LITELLM_HOST:4000/v1
+LITELLM_API_KEY=your_api_key_here
+```
+
+Then create the global configuration file:
+
+```bash
+mkdir -p ~/.sky-code
+nano ~/.sky-code/config.json
+```
+
+See the Configuration Files section for the full schema.
 
 Never commit `.env` to version control.
 
@@ -163,15 +176,18 @@ LITELLM_API_KEY
 
 `LITELLM_API_URL` is the base URL ending in `/v1`.
 
-`LITELLM_API_KEY` is the API key sent to LiteLLM.
+`LITELLM_API_KEY` is the API key sent to the configured endpoint.
 
 The LiteLLM server may store the same key under the server-side name `LITELLM_MASTER_KEY`. Do not use that variable name on the Sky Code client.
 
-The environment file is loaded from:
+Environment variables are loaded from these locations, checked in order:
 
 ```text
-~/sky-code/.env
+~/sky-code/.env          (project directory, takes priority)
+~/.sky-code/.env         (written by sky setup, used as fallback)
 ```
+
+`sky setup` writes credentials to `~/.sky-code/.env`. If you set environment variables in a shell profile or pass them directly, those take the highest priority.
 
 The API key is not read from `config.json`.
 
@@ -197,7 +213,7 @@ Optional project configuration:
 
 Configuration priority is:
 
-1. `LITELLM_API_URL` and `LITELLM_API_KEY`
+1. `LITELLM_API_URL` and `LITELLM_API_KEY` environment variables
 2. Project `.sky-code/config.json`
 3. Global `~/.sky-code/config.json`
 4. Built-in `config/defaults.json`
@@ -457,6 +473,25 @@ Every header value must be a string.
 
 ## Run Sky Code
 
+### First-Time Setup
+
+If Sky Code has not been configured yet, run the setup wizard first:
+
+```bash
+sky setup
+```
+
+The wizard will ask for your API endpoint URL, API key, default model, and permission mode, test the connection, and write your configuration automatically.
+
+If you run `sky` before completing setup, Sky Code will display:
+
+```text
+Sky Code is not configured yet.
+Run 'sky setup' to get started.
+```
+
+### Starting Sky Code
+
 Start Sky Code from any directory:
 
 ```bash
@@ -511,6 +546,26 @@ Ctrl+C
 Sky Code writes a final `session_end` record before closing.
 
 ## Built-in Commands
+
+### `sky setup`
+
+Runs the interactive first-time configuration wizard.
+
+```bash
+sky setup
+```
+
+The wizard guides you through:
+
+- API endpoint URL
+- API key (hidden input)
+- Connection test against the configured endpoint
+- Default model selection from the live model list
+- Default permission mode selection
+
+Configuration is written to `~/.sky-code/config.json` and `~/.sky-code/.env`.
+
+If Sky Code is already configured, the wizard asks before overwriting existing settings.
 
 ### `/model`
 
@@ -1421,8 +1476,8 @@ npm test
 The verified test result is:
 
 ```text
-Test Files  49 passed
-Tests       289 passed
+Test Files  50 passed
+Tests       296 passed
 ```
 
 The suite includes:
@@ -1438,6 +1493,7 @@ The suite includes:
 - History-search tests
 - Session-resume tests
 - Startup-health tests
+- Setup-wizard tests
 - Error-reporting tests
 - Sub-agent worker tests
 - Integration tests
@@ -1466,6 +1522,12 @@ Run globally:
 sky
 ```
 
+Run the setup wizard:
+
+```bash
+sky setup
+```
+
 Run tests once:
 
 ```bash
@@ -1490,6 +1552,7 @@ npm run dev
 ~/sky-code/
 ├── src/
 │   ├── index.ts
+│   ├── setup.ts
 │   ├── chat.ts
 │   ├── config.ts
 │   ├── fileops.ts
@@ -1526,8 +1589,8 @@ npm run dev
 │   ├── fixtures/
 │   ├── basic.test.ts
 │   ├── integration.test.ts
+│   ├── setup.test.ts
 │   └── additional test files
-├── .env
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -1540,15 +1603,17 @@ npm run dev
 
 ### Protect the API Key
 
-The real LiteLLM key belongs only in:
+The real API key belongs only in your environment files:
 
 ```text
-~/sky-code/.env
+~/.sky-code/.env     (written by sky setup)
+~/sky-code/.env      (manual configuration)
 ```
 
-Verify its permissions:
+Verify permissions on either file:
 
 ```bash
+stat -c "%a %U %n" ~/.sky-code/.env
 stat -c "%a %U %n" ~/sky-code/.env
 ```
 
@@ -1602,6 +1667,21 @@ Additional controls can include:
 
 ## Troubleshooting
 
+### Sky Code Is Not Configured Yet
+
+If you see:
+
+```text
+Sky Code is not configured yet.
+Run 'sky setup' to get started.
+```
+
+Run the setup wizard:
+
+```bash
+sky setup
+```
+
 ### Sky Code Reads Configuration from the Wrong Home Directory
 
 Confirm the active user and home directory:
@@ -1624,18 +1704,18 @@ Do not run Sky Code from a root login shell.
 
 ### `.env` Is Not Loaded
 
-Confirm the fixed environment file exists:
+Confirm the environment file exists in one of the expected locations:
 
 ```bash
+ls -l ~/.sky-code/.env
 ls -l ~/sky-code/.env
 ```
 
 Check the variable names without displaying the key:
 
 ```bash
-grep '^LITELLM_API_URL=' ~/sky-code/.env
-
-grep -q '^LITELLM_API_KEY=.' ~/sky-code/.env \
+grep '^LITELLM_API_URL=' ~/.sky-code/.env
+grep -q '^LITELLM_API_KEY=.' ~/.sky-code/.env \
   && echo "API key is present" \
   || echo "API key is missing"
 ```
