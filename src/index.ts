@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  existsSync,
   realpathSync,
 } from "node:fs";
 
@@ -138,6 +139,10 @@ import {
 import {
   promptForSessionResume,
 } from "./session-resume-prompt.js";
+
+import {
+  runSetup,
+} from "./setup.js";
 
 import {
   runStartupHealthCheck,
@@ -719,8 +724,60 @@ async function loadMcpTools(
 
 export async function runCli():
   Promise<void> {
+  if (
+    process.argv[2] ===
+    "setup"
+  ) {
+    await runSetup();
+    process.exit(0);
+  }
+
   const workingDirectory =
     process.cwd();
+
+  const globalConfigPath =
+    resolve(
+      homedir(),
+      ".sky-code",
+      "config.json",
+    );
+
+  const projectEnvironmentPath =
+    fileURLToPath(
+      new URL(
+        "../.env",
+        import.meta.url,
+      ),
+    );
+
+  const hasEnvironmentApiUrl =
+    typeof process.env
+      .LITELLM_API_URL ===
+      "string" &&
+    process.env
+      .LITELLM_API_URL
+      .trim() !==
+      "";
+
+  if (
+    !hasEnvironmentApiUrl &&
+    !existsSync(
+      globalConfigPath,
+    ) &&
+    !existsSync(
+      projectEnvironmentPath,
+    )
+  ) {
+    console.log(
+      "Sky Code is not configured yet.",
+    );
+
+    console.log(
+      "Run 'sky setup' to get started.",
+    );
+
+    return;
+  }
 
   const config =
     await loadConfig(

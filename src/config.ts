@@ -92,6 +92,18 @@ loadDotEnv({
   quiet: true,
 });
 
+const globalEnvironmentPath =
+  join(
+    homedir(),
+    ".sky-code",
+    ".env",
+  );
+
+loadDotEnv({
+  path: globalEnvironmentPath,
+  quiet: true,
+});
+
 const defaultsPath =
   fileURLToPath(
     new URL(
