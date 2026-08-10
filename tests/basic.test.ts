@@ -11,6 +11,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import type {
@@ -176,6 +177,164 @@ describe(
         ).toThrow(
           "A sky-tool request must begin the model response",
         );
+      },
+    );
+
+    it(
+      "uses the first of two valid tool blocks and warns",
+      () => {
+        const warningSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        try {
+          const response = [
+            "```sky-tool",
+            '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+            "```",
+            "```sky-tool",
+            '{"tool":"run_shell_command","args":{"command":"pwd"}}',
+            "```",
+          ].join("\n");
+
+          expect(
+            parseSkyToolRequest(
+              response,
+            ),
+          ).toEqual({
+            tool:
+              "read_file",
+            args: {
+              path:
+                "/tmp/first.txt",
+            },
+          });
+
+          expect(
+            warningSpy,
+          ).toHaveBeenCalledTimes(
+            1,
+          );
+
+          expect(
+            warningSpy,
+          ).toHaveBeenCalledWith(
+            [
+              "Warning: The model returned 2 sky-tool blocks. Only the first was used.",
+              "This can happen when the conversation is very long. Consider running /compact.",
+              "",
+            ].join("\n"),
+          );
+        } finally {
+          warningSpy.mockRestore();
+        }
+      },
+    );
+
+    it(
+      "uses the first of three valid tool blocks and warns",
+      () => {
+        const warningSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        try {
+          const response = [
+            "```sky-tool",
+            '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+            "```",
+            "```sky-tool",
+            '{"tool":"run_shell_command","args":{"command":"pwd"}}',
+            "```",
+            "```sky-tool",
+            '{"tool":"write_file","args":{"path":"/tmp/third.txt","content":"third"}}',
+            "```",
+          ].join("\n");
+
+          expect(
+            parseSkyToolRequest(
+              response,
+            ),
+          ).toEqual({
+            tool:
+              "read_file",
+            args: {
+              path:
+                "/tmp/first.txt",
+            },
+          });
+
+          expect(
+            warningSpy,
+          ).toHaveBeenCalledTimes(
+            1,
+          );
+
+          expect(
+            warningSpy,
+          ).toHaveBeenCalledWith(
+            [
+              "Warning: The model returned 3 sky-tool blocks. Only the first was used.",
+              "This can happen when the conversation is very long. Consider running /compact.",
+              "",
+            ].join("\n"),
+          );
+        } finally {
+          warningSpy.mockRestore();
+        }
+      },
+    );
+
+    it(
+      "does not warn for malformed or partial later tool blocks",
+      () => {
+        const warningSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        try {
+          const response = [
+            "```sky-tool",
+            '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+            "```",
+            "```sky-tool",
+            '{"tool":"run_shell_command","args":',
+            "```",
+            "```sky-tool",
+            '{"tool":"write_file","args":{"path":"/tmp/incomplete.txt","content":"unfinished"}}',
+          ].join("\n");
+
+          expect(
+            parseSkyToolRequest(
+              response,
+            ),
+          ).toEqual({
+            tool:
+              "read_file",
+            args: {
+              path:
+                "/tmp/first.txt",
+            },
+          });
+
+          expect(
+            warningSpy,
+          ).not.toHaveBeenCalled();
+        } finally {
+          warningSpy.mockRestore();
+        }
       },
     );
 

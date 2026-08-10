@@ -312,9 +312,10 @@ export function createSkyCodeSystemPrompt(
 export const SKY_CODE_SYSTEM_PROMPT =
   createSkyCodeSystemPrompt();
 
-// Match fenced `sky-tool` blocks globally so the parser can explicitly reject
-// responses containing more than one tool request. The capture group contains
-// only the JSON body between the opening and closing fences.
+// Match complete fenced `sky-tool` blocks globally so the parser can inspect
+// the leading request and determine whether later complete blocks contain
+// additional valid tool requests. The capture group contains only the JSON body
+// between the opening and closing fences.
 const SKY_TOOL_BLOCK_PATTERN =
   /```sky-tool[ \t]*\r?\n([\s\S]*?)\r?\n```/g;
 
@@ -439,69 +440,25 @@ function isToolName(
 }
 
 /**
- * Parses and validates a model response containing a Sky Code tool request.
+ * Parses and validates the JSON body captured from one complete `sky-tool`
+ * fenced block.
  *
- * A valid tool request must contain exactly one fenced `sky-tool` block, that
- * block must begin the trimmed model response, and its contents must be a JSON
- * object containing recognized `tool` and object-valued `args` properties.
+ * This helper contains the JSON, tool-name, args-object, and tool-specific
+ * validation shared by the leading request and any later complete blocks that
+ * are inspected only to determine whether a multi-block warning is required.
  *
- * Tool-specific validation then converts the untrusted argument object into
- * the corresponding SkyToolRequest variant. An ordinary model response with no
- * sky-tool block returns null instead of throwing.
+ * @param {string} jsonText - Raw text captured between the opening and closing
+ * fences of one complete `sky-tool` block.
+ * @returns {SkyToolRequest} Fully validated Sky Code tool request.
+ * @throws {Error} If the block contains invalid JSON, the JSON is not an
+ * object, the tool name is unknown, args is not an object, or a tool-specific
+ * argument fails validation.
  *
- * @param {string} responseText - Complete assistant response returned by the
- * model.
- * @returns {SkyToolRequest | null} Validated tool request, or null when the
- * response does not contain a sky-tool block.
- * @throws {Error} If multiple tool blocks are present, the tool block does not
- * start the response, JSON is invalid, the tool name is unknown, args is not an
- * object, or a tool-specific argument fails validation.
+ * Side effects: none.
  */
-export function parseSkyToolRequest(
-  responseText: string,
-): SkyToolRequest | null {
-  const trimmedResponse =
-    responseText.trim();
-
-  const matches = [
-    ...trimmedResponse.matchAll(
-      SKY_TOOL_BLOCK_PATTERN,
-    ),
-  ];
-
-  // No tool block means this is an ordinary assistant response.
-  if (matches.length === 0) {
-    return null;
-  }
-
-  // The protocol allows only one tool request per model round so execution is
-  // serialized and every result can be returned before another tool is chosen.
-  if (matches.length > 1) {
-    throw new Error(
-      "The model response contains more than one sky-tool block",
-    );
-  }
-
-  const match = matches[0];
-
-  // Tool responses must not contain ordinary assistant prose before the block.
-  if (
-    !match ||
-    match.index !== 0
-  ) {
-    throw new Error(
-      "A sky-tool request must begin the model response",
-    );
-  }
-
-  const jsonText = match[1];
-
-  if (jsonText === undefined) {
-    throw new Error(
-      "The sky-tool block is empty",
-    );
-  }
-
+function parseSkyToolBlockJson(
+  jsonText: string,
+): SkyToolRequest {
   let parsed: unknown;
 
   try {
@@ -693,6 +650,121 @@ export function parseSkyToolRequest(
       };
     }
   }
+}
+
+/**
+ * Parses and validates a model response containing a Sky Code tool request.
+ *
+ * A valid leading tool request must begin the trimmed model response and must
+ * contain a complete fenced `sky-tool` block whose contents are a JSON object
+ * containing recognized `tool` and object-valued `args` properties.
+ *
+ * The leading block is validated exactly as before. Later complete fenced
+ * blocks are inspected only to determine whether they also contain fully valid
+ * Sky Code tool requests. If more than one valid request is present, only the
+ * leading request is returned and a terminal warning explains that the
+ * additional valid requests were ignored and suggests running /compact.
+ *
+ * Later complete blocks containing invalid JSON or otherwise failing normal
+ * Sky Code tool validation are not counted as additional valid blocks and do
+ * not trigger the multi-block warning. An ordinary model response with no
+ * complete sky-tool block still returns null.
+ *
+ * @param {string} responseText - Complete assistant response returned by the
+ * model.
+ * @returns {SkyToolRequest | null} Validated leading tool request, or null when
+ * the response does not contain a complete sky-tool block.
+ * @throws {Error} If the leading tool block does not start the response, its
+ * JSON is invalid, the tool name is unknown, args is not an object, or a
+ * tool-specific argument fails validation.
+ *
+ * Side effect: writes a warning to stderr when more than one complete fenced
+ * block contains a fully valid Sky Code tool request.
+ */
+export function parseSkyToolRequest(
+  responseText: string,
+): SkyToolRequest | null {
+  const trimmedResponse =
+    responseText.trim();
+
+  const matches = [
+    ...trimmedResponse.matchAll(
+      SKY_TOOL_BLOCK_PATTERN,
+    ),
+  ];
+
+  // No complete tool block means this is an ordinary assistant response.
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const match = matches[0];
+
+  // Preserve the existing protocol rule for the primary request: ordinary
+  // assistant prose cannot appear before the first complete tool block.
+  if (
+    !match ||
+    match.index !== 0
+  ) {
+    throw new Error(
+      "A sky-tool request must begin the model response",
+    );
+  }
+
+  const jsonText = match[1];
+
+  if (jsonText === undefined) {
+    throw new Error(
+      "The sky-tool block is empty",
+    );
+  }
+
+  // Validate the leading request before inspecting later blocks. This preserves
+  // its existing error behavior instead of hiding a malformed primary request.
+  const request =
+    parseSkyToolBlockJson(
+      jsonText,
+    );
+
+  let validBlockCount = 1;
+
+  for (
+    const additionalMatch of
+    matches.slice(1)
+  ) {
+    const additionalJsonText =
+      additionalMatch[1];
+
+    if (
+      additionalJsonText ===
+        undefined
+    ) {
+      continue;
+    }
+
+    try {
+      parseSkyToolBlockJson(
+        additionalJsonText,
+      );
+
+      validBlockCount += 1;
+    } catch {
+      // A malformed later block cannot be executed, so it must not turn an
+      // otherwise valid primary request into a multi-block warning.
+    }
+  }
+
+  if (validBlockCount > 1) {
+    console.warn(
+      [
+        `Warning: The model returned ${validBlockCount} sky-tool blocks. Only the first was used.`,
+        "This can happen when the conversation is very long. Consider running /compact.",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  return request;
 }
 
 /**
