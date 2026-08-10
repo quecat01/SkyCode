@@ -1,3 +1,14 @@
+/**
+ * In-memory background-task lifecycle management for Sky Code.
+ *
+ * BackgroundTaskRegistry starts asynchronous work, tracks lifecycle state,
+ * supports cooperative AbortSignal cancellation, publishes Notification hooks,
+ * and optionally reports human-readable status updates.
+ *
+ * Completed, failed, and cancelled tasks remain available for inspection.
+ * Public task reads return snapshot copies rather than the registry's mutable
+ * task-state objects.
+ */
 import {
   randomUUID,
 } from "node:crypto";
@@ -7,12 +18,21 @@ import type {
   NotificationLevel,
 } from "./hooks.js";
 
+/**
+ * Current lifecycle state of a registered background task.
+ */
 export type BackgroundTaskStatus =
   | "running"
   | "completed"
   | "failed"
   | "cancelled";
 
+/**
+ * Lifecycle event emitted while a background task runs.
+ *
+ * A task emits `started`, may emit multiple `progress` events, and eventually
+ * reaches `completed`, `failed`, or `cancelled`.
+ */
 export type BackgroundTaskLifecycleEvent =
   | "started"
   | "progress"
@@ -20,6 +40,12 @@ export type BackgroundTaskLifecycleEvent =
   | "failed"
   | "cancelled";
 
+/**
+ * Snapshot of externally visible background-task state.
+ *
+ * Timestamps are ISO-8601 strings. Terminal tasks may expose result, error, or
+ * cancellation information depending on how execution ended.
+ */
 export interface BackgroundTaskSnapshot {
   id: string;
   label: string;
@@ -33,6 +59,12 @@ export interface BackgroundTaskSnapshot {
   cancellationReason?: string;
 }
 
+/**
+ * Runtime services supplied to a BackgroundTaskRunner.
+ *
+ * signal communicates cooperative cancellation. reportProgress updates the
+ * task snapshot and publishes a progress lifecycle event.
+ */
 export interface BackgroundTaskContext {
   signal: AbortSignal;
 
@@ -41,16 +73,38 @@ export interface BackgroundTaskContext {
   ): Promise<void>;
 }
 
+/**
+ * Asynchronous implementation of one background task.
+ *
+ * @param {BackgroundTaskContext} context - Cancellation and progress-reporting
+ * facilities for the running task.
+ * @returns {Promise<unknown>} Task result stored when execution succeeds.
+ */
 export type BackgroundTaskRunner = (
   context: BackgroundTaskContext,
 ) => Promise<unknown>;
 
+/**
+ * Optional observer that receives formatted task lifecycle updates.
+ *
+ * @param {string} line - Human-readable lifecycle status line.
+ * @param {BackgroundTaskSnapshot} task - Snapshot of task state at event time.
+ * @param {BackgroundTaskLifecycleEvent} event - Event being reported.
+ * @returns {void | Promise<void>} Optional asynchronous reporting work.
+ */
 export type BackgroundTaskReporter = (
   line: string,
   task: BackgroundTaskSnapshot,
   event: BackgroundTaskLifecycleEvent,
 ) => void | Promise<void>;
 
+/**
+ * Optional dependencies used by BackgroundTaskRegistry.
+ *
+ * hookRegistry publishes lifecycle Notification hooks. reporter receives
+ * formatted lifecycle lines. createId and now allow deterministic ID/time
+ * behavior, particularly in tests.
+ */
 export interface BackgroundTaskRegistryOptions {
   hookRegistry?: HookRegistry;
   reporter?: BackgroundTaskReporter;
@@ -58,6 +112,12 @@ export interface BackgroundTaskRegistryOptions {
   now?: () => Date;
 }
 
+/**
+ * Handle returned to the caller after a task is started.
+ *
+ * done resolves to the final task snapshot. cancel() requests cooperative
+ * cancellation and reports whether an active task was found.
+ */
 export interface BackgroundTaskHandle {
   id: string;
 
@@ -69,14 +129,31 @@ export interface BackgroundTaskHandle {
   ): boolean;
 }
 
+/**
+ * Mutable internal state retained by BackgroundTaskRegistry for one task.
+ *
+ * Combines the current snapshot, cancellation controller, and final completion
+ * promise.
+ */
 interface StoredBackgroundTask {
   snapshot: BackgroundTaskSnapshot;
   controller: AbortController;
   done: Promise<BackgroundTaskSnapshot>;
 }
 
+/**
+ * Error used to represent intentional background-task cancellation.
+ *
+ * The registry treats this error, and standard errors named `AbortError`, as
+ * cancellation rather than ordinary task failure.
+ */
 export class BackgroundTaskCancelledError
   extends Error {
+  /**
+   * Creates a background-task cancellation error.
+   *
+   * @param {string} message - Human-readable cancellation reason.
+   */
   public constructor(
     message:
       string =
@@ -88,6 +165,14 @@ export class BackgroundTaskCancelledError
   }
 }
 
+/**
+ * Validates and normalizes required task text.
+ *
+ * @param {string} value - Candidate text value.
+ * @param {string} fieldName - Field label included in validation errors.
+ * @returns {string} Trimmed non-empty value.
+ * @throws {Error} If value is not a string or is empty after trimming.
+ */
 function requireNonEmptyText(
   value: string,
   fieldName: string,
@@ -106,6 +191,15 @@ function requireNonEmptyText(
   return value.trim();
 }
 
+/**
+ * Creates a shallow copy of task state before exposing it externally.
+ *
+ * The snapshot object itself is isolated from registry mutation. The optional
+ * unknown result payload is intentionally not deep-cloned.
+ *
+ * @param {BackgroundTaskSnapshot} snapshot - Task snapshot to copy.
+ * @returns {BackgroundTaskSnapshot} Shallow copy of the snapshot.
+ */
 function cloneTaskSnapshot(
   snapshot:
     BackgroundTaskSnapshot,
@@ -115,6 +209,12 @@ function cloneTaskSnapshot(
   };
 }
 
+/**
+ * Converts an unknown failure into readable task-error text.
+ *
+ * @param {unknown} error - Thrown or rejected value.
+ * @returns {string} Error.message when available, otherwise String(error).
+ */
 function describeError(
   error: unknown,
 ): string {
@@ -130,6 +230,13 @@ function describeError(
   );
 }
 
+/**
+ * Determines whether an execution error represents task cancellation.
+ *
+ * @param {unknown} error - Failure value to inspect.
+ * @returns {boolean} True for BackgroundTaskCancelledError or an Error whose
+ * name is `AbortError`.
+ */
 function isAbortError(
   error: unknown,
 ): boolean {
@@ -145,6 +252,13 @@ function isAbortError(
   );
 }
 
+/**
+ * Maps a task lifecycle event to Notification hook severity.
+ *
+ * @param {BackgroundTaskLifecycleEvent} event - Event to classify.
+ * @returns {NotificationLevel} Error for failure, warning for cancellation,
+ * otherwise informational.
+ */
 function notificationLevelForEvent(
   event:
     BackgroundTaskLifecycleEvent,
@@ -161,6 +275,13 @@ function notificationLevelForEvent(
   }
 }
 
+/**
+ * Creates the human-readable Notification hook message for a lifecycle event.
+ *
+ * @param {BackgroundTaskLifecycleEvent} event - Lifecycle event being emitted.
+ * @param {BackgroundTaskSnapshot} snapshot - Current task state.
+ * @returns {string} Notification message describing the event.
+ */
 function notificationMessageForEvent(
   event:
     BackgroundTaskLifecycleEvent,
@@ -185,6 +306,13 @@ function notificationMessageForEvent(
   }
 }
 
+/**
+ * Formats one lifecycle event as a concise task status line.
+ *
+ * @param {BackgroundTaskLifecycleEvent} event - Event to format.
+ * @param {BackgroundTaskSnapshot} snapshot - Current task state.
+ * @returns {string} Status line prefixed with the background-task ID.
+ */
 export function formatBackgroundTaskStatusLine(
   event:
     BackgroundTaskLifecycleEvent,
@@ -212,6 +340,13 @@ export function formatBackgroundTaskStatusLine(
   }
 }
 
+/**
+ * Registry responsible for starting, inspecting, cancelling, and reporting
+ * asynchronous background tasks.
+ *
+ * Tasks are kept in memory after reaching a terminal state so callers can query
+ * their final snapshots.
+ */
 export class BackgroundTaskRegistry {
   private readonly tasks =
     new Map<
@@ -231,6 +366,12 @@ export class BackgroundTaskRegistry {
   private readonly now:
     () => Date;
 
+  /**
+   * Creates a background-task registry.
+   *
+   * @param {BackgroundTaskRegistryOptions} options - Optional hooks, reporter,
+   * ID factory, and clock.
+   */
   public constructor(
     options:
       BackgroundTaskRegistryOptions = {},
@@ -250,6 +391,22 @@ export class BackgroundTaskRegistry {
       (() => new Date());
   }
 
+  /**
+   * Starts and registers one background task.
+   *
+   * The task label, runner, and generated ID are validated before registration.
+   * IDs must be unique within this registry. Execution is represented by the
+   * returned done promise and may be cooperatively cancelled through the handle.
+   *
+   * @param {string} labelValue - Human-readable task label.
+   * @param {BackgroundTaskRunner} runner - Asynchronous task implementation.
+   * @returns {BackgroundTaskHandle} Task ID, completion promise, and cancel API.
+   * @throws {Error} If label/ID validation fails, runner is not a function, or
+   * the generated task ID is already registered.
+   *
+   * Side effects: creates task state, starts asynchronous execution, stores the
+   * task in memory, and may emit lifecycle notifications.
+   */
   public start(
     labelValue: string,
     runner:
@@ -343,6 +500,13 @@ export class BackgroundTaskRegistry {
     };
   }
 
+  /**
+   * Looks up the current state of one background task.
+   *
+   * @param {string} id - Exact registered task ID.
+   * @returns {BackgroundTaskSnapshot | null} Snapshot copy when found,
+   * otherwise null.
+   */
   public get(
     id: string,
   ): BackgroundTaskSnapshot | null {
@@ -358,6 +522,12 @@ export class BackgroundTaskRegistry {
       : null;
   }
 
+  /**
+   * Lists registered tasks in deterministic start-time and ID order.
+   *
+   * @param {boolean} includeFinished - Whether terminal tasks should be included.
+   * @returns {BackgroundTaskSnapshot[]} Sorted snapshot copies.
+   */
   public list(
     includeFinished:
       boolean = true,
@@ -395,6 +565,11 @@ export class BackgroundTaskRegistry {
       );
   }
 
+  /**
+   * Counts currently running background tasks.
+   *
+   * @returns {number} Number of tasks whose status is `running`.
+   */
   public countRunning():
     number {
     return this.list(
@@ -402,6 +577,22 @@ export class BackgroundTaskRegistry {
     ).length;
   }
 
+  /**
+   * Requests cooperative cancellation of a running task.
+   *
+   * The cancellation reason, progress text, and update timestamp are recorded
+   * before its AbortController is aborted. The task runner must observe its
+   * AbortSignal for immediate interruption; executeTask() also checks the signal
+   * after runner completion.
+   *
+   * @param {string} idValue - Task ID to cancel.
+   * @param {string} reasonValue - Human-readable cancellation reason.
+   * @returns {boolean} True when cancellation was requested for a running task;
+   * false for blank, unknown, or already-finished IDs.
+   * @throws {Error} If a matched running task is given an empty reason.
+   *
+   * Side effects: mutates task state and aborts its AbortController.
+   */
   public cancel(
     idValue: string,
     reasonValue:
@@ -461,6 +652,19 @@ export class BackgroundTaskRegistry {
     return true;
   }
 
+  /**
+   * Cancels all tasks that are running when this method is called.
+   *
+   * The active task set is captured first, each task receives the same
+   * cancellation reason, and their completion promises are then awaited.
+   *
+   * @param {string} reason - Cancellation reason applied to running tasks.
+   * @returns {Promise<BackgroundTaskSnapshot[]>} Final snapshots for tasks that
+   * were running at the start of this operation.
+   * @throws {Error} If cancellation validation or an awaited completion rejects.
+   *
+   * Side effects: requests cancellation of all captured running tasks.
+   */
   public async cancelAll(
     reason:
       string =
@@ -500,6 +704,25 @@ export class BackgroundTaskRegistry {
     );
   }
 
+  /**
+   * Executes one task and manages its complete lifecycle.
+   *
+   * The started event is emitted before runner execution. Cancellation is
+   * checked both before and after the runner so a task cannot be marked complete
+   * after cancellation simply because its runner ignored AbortSignal.
+   *
+   * The runner's reportProgress callback validates progress text, updates the
+   * snapshot timestamp/message, and emits progress events. Terminal execution
+   * becomes completed, failed, or cancelled and receives a completedAt timestamp
+   * before the corresponding lifecycle event is emitted.
+   *
+   * @param {StoredBackgroundTask} storedTask - Mutable internal task record.
+   * @param {BackgroundTaskRunner} runner - Asynchronous task implementation.
+   * @returns {Promise<BackgroundTaskSnapshot>} Final shallow snapshot.
+   *
+   * Side effects: invokes the task runner, mutates task state, and emits
+   * lifecycle hooks/reporter callbacks.
+   */
   private async executeTask(
     storedTask:
       StoredBackgroundTask,
@@ -678,6 +901,20 @@ export class BackgroundTaskRegistry {
     );
   }
 
+  /**
+   * Publishes a task lifecycle event to configured observers.
+   *
+   * A snapshot copy is created before notification. Notification hooks run
+   * first, followed by the optional reporter, so observer code does not receive
+   * the mutable registry snapshot directly.
+   *
+   * @param {BackgroundTaskLifecycleEvent} event - Lifecycle event to emit.
+   * @param {BackgroundTaskSnapshot} snapshot - Current internal task snapshot.
+   * @returns {Promise<void>} Resolves after all configured observers complete.
+   * @throws {Error} If a Notification hook or reporter rejects.
+   *
+   * Side effects: may invoke Notification hooks and the task reporter.
+   */
   private async emitLifecycleEvent(
     event:
       BackgroundTaskLifecycleEvent,

@@ -1,3 +1,11 @@
+/**
+ * Runtime management for Sky Code custom catalog commands and skills.
+ *
+ * This module parses `/catalog` management commands, formats catalog state,
+ * imports and removes catalog JSON files, and tracks which catalog skills are
+ * enabled for the current session. Catalog mutations are reloaded and validated
+ * against active plugin skills before becoming the manager's current state.
+ */
 import { constants } from "node:fs";
 
 import {
@@ -30,6 +38,13 @@ import type {
   ActivePluginSkill,
 } from "./plugins.js";
 
+/**
+ * Parsed `/catalog` management operation.
+ *
+ * The discriminated union represents listing the current catalog, importing a
+ * JSON file, removing an item by name, or enabling/disabling a catalog skill for
+ * the current session.
+ */
 export type CatalogManagementCommand =
   | {
       action:
@@ -64,6 +79,12 @@ export type CatalogManagementCommand =
         string;
     };
 
+/**
+ * Result returned after a catalog-management operation.
+ *
+ * Each result includes the user-facing message, the manager's current catalog
+ * snapshot, and the catalog skills that are active for this session.
+ */
 export interface CatalogManagementResult {
   message:
     string;
@@ -75,6 +96,9 @@ export interface CatalogManagementResult {
     CatalogSkill[];
 }
 
+/**
+ * Initial state and environment used to create a CatalogManager.
+ */
 export interface CatalogManagerOptions {
   catalog:
     CatalogSnapshot;
@@ -86,6 +110,16 @@ export interface CatalogManagerOptions {
     string;
 }
 
+/**
+ * Validates a required argument from a `/catalog` subcommand.
+ *
+ * @param {string} value - Raw argument text following the subcommand.
+ * @param {string} usage - Usage syntax included in the error when missing.
+ * @returns {string} Trimmed non-empty argument.
+ * @throws {Error} If the argument is empty or only whitespace.
+ *
+ * Side effects: none.
+ */
 function requireArgument(
   value:
     string,
@@ -108,6 +142,20 @@ function requireArgument(
   return trimmedValue;
 }
 
+/**
+ * Parses raw user input as a `/catalog` management command.
+ *
+ * Input unrelated to `/catalog` returns null so other command handlers may
+ * process it. A bare `/catalog`, unknown action, extra argument to `list`, or
+ * missing required action argument throws a user-facing usage error.
+ *
+ * @param {string} userInput - Raw terminal input to inspect.
+ * @returns {CatalogManagementCommand | null} Parsed catalog command, or null
+ * when the input is not a `/catalog` command.
+ * @throws {Error} If recognized `/catalog` syntax is incomplete or invalid.
+ *
+ * Side effects: none.
+ */
 export function parseCatalogManagementCommand(
   userInput:
     string,
@@ -239,6 +287,19 @@ export function parseCatalogManagementCommand(
   }
 }
 
+/**
+ * Formats the current custom catalog for terminal display.
+ *
+ * Commands are listed with their descriptions. Skills additionally show whether
+ * their names are present in the current session's enabled-skill set.
+ *
+ * @param {CatalogSnapshot} catalog - Catalog snapshot to display.
+ * @param {ReadonlySet<string>} enabledSkillNames - Skill names enabled for the
+ * current session.
+ * @returns {string} Multi-line catalog summary.
+ *
+ * Side effects: none.
+ */
 function formatCatalogList(
   catalog:
     CatalogSnapshot,
@@ -306,6 +367,19 @@ function formatCatalogList(
   );
 }
 
+/**
+ * Reads and validates a JSON file before it is copied into the catalog.
+ *
+ * Validation occurs against the source file first, preventing malformed catalog
+ * content from being copied into the managed catalog directory.
+ *
+ * @param {string} filePath - Candidate JSON file to import.
+ * @returns {Promise<CatalogItem>} Validated catalog item represented by the file.
+ * @throws {Error} If the file cannot be read, contains invalid JSON, or fails
+ * catalog-item validation.
+ *
+ * Side effects: reads the candidate file from disk.
+ */
 async function readAndValidateImportFile(
   filePath:
     string,
@@ -359,19 +433,43 @@ async function readAndValidateImportFile(
   );
 }
 
+/**
+ * Manages catalog listing, imports, removal, and per-session skill activation.
+ *
+ * The manager owns the current CatalogSnapshot and the set of locally enabled
+ * catalog skills. Plugin skills are retained for conflict validation whenever
+ * the catalog is initially accepted or reloaded.
+ *
+ * File-changing operations reload the catalog so subsequent reads use validated
+ * on-disk state. Failed imports are rolled back by deleting the copied file and
+ * reloading the previous catalog state before the original error is rethrown.
+ */
 export class CatalogManager {
+  /** Current validated catalog snapshot owned by the manager. */
   private catalog:
     CatalogSnapshot;
 
+  /** Active plugin skills checked for naming conflicts with catalog skills. */
   private readonly pluginSkills:
     readonly ActivePluginSkill[];
 
+  /** Base directory used to resolve relative paths supplied to `/catalog add`. */
   private readonly workingDirectory:
     string;
 
+  /** Catalog skill names enabled only for the lifetime of this manager/session. */
   private readonly enabledSkillNames =
     new Set<string>();
 
+  /**
+   * Creates a catalog manager from an already-loaded catalog snapshot.
+   *
+   * @param {CatalogManagerOptions} options - Initial catalog, plugin skills, and
+   * optional working-directory override.
+   * @throws {Error} If the initial catalog conflicts with active plugin skills.
+   *
+   * Side effects: reads process.cwd() when no workingDirectory is supplied.
+   */
   constructor(
     options:
       CatalogManagerOptions,
@@ -393,11 +491,25 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Returns the manager's current catalog snapshot.
+   *
+   * @returns {CatalogSnapshot} Current validated catalog snapshot.
+   *
+   * Side effects: none.
+   */
   getSnapshot():
     CatalogSnapshot {
     return this.catalog;
   }
 
+  /**
+   * Returns a defensive copy of the session's enabled catalog skill names.
+   *
+   * @returns {ReadonlySet<string>} Independent set containing enabled names.
+   *
+   * Side effects: none.
+   */
   getEnabledSkillNames():
     ReadonlySet<string> {
     return new Set(
@@ -405,6 +517,14 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Resolves enabled skill names to the catalog skills currently available.
+   *
+   * @returns {CatalogSkill[]} Enabled catalog skills selected from the current
+   * snapshot.
+   *
+   * Side effects: none.
+   */
   getActiveSkills():
     CatalogSkill[] {
     return selectEnabledCatalogSkills(
@@ -413,6 +533,15 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Builds a management result from the manager's current state.
+   *
+   * @param {string} message - User-facing operation result.
+   * @returns {CatalogManagementResult} Message, current catalog, and active
+   * catalog skills.
+   *
+   * Side effects: none.
+   */
   private createResult(
     message:
       string,
@@ -428,6 +557,21 @@ export class CatalogManager {
     };
   }
 
+  /**
+   * Reloads and revalidates the managed catalog directory.
+   *
+   * After loading, plugin conflicts are checked again. Enabled skill names that
+   * no longer exist are removed so session activation state cannot reference
+   * deleted catalog skills.
+   *
+   * @returns {Promise<void>} Resolves after the catalog and enabled-name set are
+   * synchronized with disk.
+   * @throws {Error} If catalog loading/validation or plugin conflict validation
+   * fails.
+   *
+   * Side effects: reads the catalog directory and may remove stale names from
+   * enabledSkillNames.
+   */
   private async reload():
     Promise<void> {
     this.catalog =
@@ -467,6 +611,17 @@ export class CatalogManager {
     }
   }
 
+  /**
+   * Executes one parsed catalog-management command.
+   *
+   * @param {CatalogManagementCommand} command - Operation to execute.
+   * @returns {Promise<CatalogManagementResult>} Updated management result.
+   * @throws {Error} When the selected operation fails validation or filesystem
+   * work.
+   *
+   * Side effects: depending on the action, may read/write catalog files or
+   * mutate this session's enabled-skill set.
+   */
   async execute(
     command:
       CatalogManagementCommand,
@@ -504,6 +659,27 @@ export class CatalogManager {
     }
   }
 
+  /**
+   * Imports a validated JSON catalog file into the managed catalog directory.
+   *
+   * Relative paths are resolved from workingDirectory. Imports must use a
+   * `.json` extension and COPYFILE_EXCL prevents overwriting an existing file.
+   * The source is validated before copying.
+   *
+   * If reloading the newly copied catalog fails, the destination file is
+   * removed, the prior directory state is reloaded, and the original reload
+   * error is rethrown. This keeps a bad import from remaining installed.
+   *
+   * @param {string} requestedPath - Absolute or working-directory-relative JSON
+   * file path supplied by the user.
+   * @returns {Promise<CatalogManagementResult>} Result for the successful import.
+   * @throws {Error} If the extension is invalid, validation fails, source and
+   * destination are the same, the destination already exists, copying fails, or
+   * the resulting catalog cannot be reloaded.
+   *
+   * Side effects: reads the source file, may copy/remove a file in the catalog
+   * directory, and reloads manager state.
+   */
   private async add(
     requestedPath:
       string,
@@ -596,6 +772,20 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Removes a catalog item by name and reloads manager state.
+   *
+   * If the removed item was an enabled skill, its session activation is cleared
+   * before the catalog is reloaded.
+   *
+   * @param {string} name - Catalog command or skill name to remove.
+   * @returns {Promise<CatalogManagementResult>} Result for the successful removal.
+   * @throws {Error} If no item has the requested name, deletion fails, or reload
+   * fails.
+   *
+   * Side effects: deletes the item's source file, updates enabled-skill state,
+   * and reloads the catalog from disk.
+   */
   private async remove(
     name:
       string,
@@ -633,6 +823,15 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Enables one catalog skill for the current session.
+   *
+   * @param {string} name - Catalog skill name to enable.
+   * @returns {CatalogManagementResult} Updated state with the enabled skill.
+   * @throws {Error} If the requested catalog skill does not exist.
+   *
+   * Side effects: adds the skill name to enabledSkillNames.
+   */
   private enable(
     name:
       string,
@@ -664,6 +863,15 @@ export class CatalogManager {
     );
   }
 
+  /**
+   * Disables one catalog skill for the current session.
+   *
+   * @param {string} name - Catalog skill name to disable.
+   * @returns {CatalogManagementResult} Updated state after disabling the skill.
+   * @throws {Error} If the requested catalog skill does not exist.
+   *
+   * Side effects: removes the skill name from enabledSkillNames.
+   */
   private disable(
     name:
       string,

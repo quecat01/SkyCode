@@ -1,5 +1,18 @@
 #!/usr/bin/env node
 
+/**
+ * Main Sky Code command-line application and executable entry point.
+ *
+ * Coordinates startup, configuration, plugins, catalog skills, MCP servers,
+ * hooks, permissions, session logging and resumption, background tasks,
+ * conversation compaction, model interaction, tool execution, interactive
+ * commands, and graceful shutdown.
+ *
+ * Most feature modules are intentionally kept separate from this file.
+ * index.ts connects those modules into the long-running interactive CLI and
+ * owns the top-level lifecycle of a Sky Code process.
+ */
+
 import {
   existsSync,
   realpathSync,
@@ -164,8 +177,22 @@ import {
   formatError,
 } from "./utils.js";
 
+// Limit a single conversational turn to twenty consecutive model-request/tool
+// cycles. This prevents a malformed or looping model response from invoking
+// tools indefinitely without returning control to the user.
 const MAX_TOOL_ROUNDS = 20;
 
+/**
+ * Formats an unknown failure as Sky Code's standard CLI error report and
+ * writes every resulting line to stderr.
+ *
+ * @param {unknown} error - Error or other thrown value to report.
+ * @param {string} operation - Human-readable name of the operation that
+ * failed, included as context in the formatted report.
+ * @returns {void} This function does not return a value.
+ *
+ * Side effect: writes one or more error-report lines to stderr.
+ */
 function printCliError(
   error:
     unknown,
@@ -188,11 +215,31 @@ function printCliError(
   }
 }
 
+/**
+ * Result of streaming one assistant turn from the configured model.
+ *
+ * The complete response is retained even when it is not printed immediately,
+ * because a response beginning with a sky-tool block is interpreted as a tool
+ * request rather than ordinary assistant output.
+ */
 interface StreamedTurn {
+  /** Complete model response accumulated from all streamed chunks. */
   responseText: string;
+  /** Whether ordinary assistant text was actually written to stdout. */
   displayedText: boolean;
 }
 
+/**
+ * Converts a completed Sky Code tool execution into the user-role message
+ * sent back to the model for the next tool round.
+ *
+ * The model receives the tool name, success flag, output text, and explicit
+ * instructions to continue responding or request another tool if needed.
+ *
+ * @param {SkyToolRequest} request - Tool request that was executed.
+ * @param {ToolExecutionResult} result - Result produced by the tool handler.
+ * @returns {string} Plain-text message suitable for adding to model context.
+ */
 function createToolResultMessage(
   request: SkyToolRequest,
   result: ToolExecutionResult,
@@ -215,6 +262,29 @@ function createToolResultMessage(
   ].join("\n");
 }
 
+/**
+ * Streams one model response while deciding whether its leading content is
+ * normal user-visible text or an internal sky-tool request.
+ *
+ * Initial chunks are temporarily buffered because the marker ` ```sky-tool `
+ * may arrive across multiple streaming chunks. Once the accumulated prefix can
+ * no longer be the start of that marker, buffered content is emitted normally.
+ * If the response does begin with the marker, it remains hidden and is later
+ * parsed as a tool request by completeConversationTurn().
+ *
+ * @param {AppConfig} config - Validated application and API configuration.
+ * @param {string} activeModel - Model identifier to use for this request.
+ * @param {ChatMessage[]} messages - Current conversation context sent to the
+ * model.
+ * @param {string} systemPrompt - Active Sky Code system prompt describing
+ * tools, skills, agents, and operating rules.
+ * @returns {Promise<StreamedTurn>} Complete model response plus an indication
+ * of whether ordinary response text was displayed.
+ * @throws {Error} If the underlying model request or stream processing fails.
+ *
+ * Side effects: performs a model API request and may stream response text to
+ * stdout as chunks arrive.
+ */
 async function streamModelTurn(
   config: AppConfig,
   activeModel: string,
@@ -224,6 +294,8 @@ async function streamModelTurn(
   let responseText = "";
   let pendingText = "";
 
+  // Output begins in an undecided state because streaming can split the
+  // sky-tool opening marker across arbitrary network chunks.
   let displayMode:
     | "undetermined"
     | "normal"
@@ -238,6 +310,8 @@ async function streamModelTurn(
       activeModel,
       messages,
       (content) => {
+        // Always preserve the entire response for logging, conversation
+        // history, and later sky-tool parsing.
         responseText += content;
 
         if (
@@ -252,11 +326,14 @@ async function streamModelTurn(
           return;
         }
 
+        // Until the response type is known, keep chunks out of the terminal.
         pendingText += content;
 
         const trimmedStart =
           pendingText.trimStart();
 
+        // If the text received so far is still only a prefix of the marker,
+        // wait for another chunk before deciding whether to display it.
         if (
           "```sky-tool".startsWith(
             trimmedStart,
@@ -265,6 +342,8 @@ async function streamModelTurn(
           return;
         }
 
+        // A completed marker identifies an internal tool request. Its textual
+        // representation should not be printed as ordinary assistant prose.
         if (
           trimmedStart.startsWith(
             "```sky-tool",
@@ -274,6 +353,8 @@ async function streamModelTurn(
           return;
         }
 
+        // The accumulated prefix cannot be a tool marker, so all buffered text
+        // belongs to the normal assistant response and can now be emitted.
         displayMode = "normal";
 
         output.write(
@@ -286,6 +367,8 @@ async function streamModelTurn(
       systemPrompt,
     );
 
+  // A short response may end before streaming supplied enough characters to
+  // make the normal/tool decision inside the chunk callback.
   if (
     displayMode ===
     "undetermined"
@@ -321,6 +404,25 @@ async function streamModelTurn(
   };
 }
 
+/**
+ * Interactively retrieves the endpoint's available models and lets the user
+ * choose a new active model for the current Sky Code session.
+ *
+ * Retrieval failures and empty model lists are non-fatal: the current model is
+ * retained and the user returns to the main prompt. Pressing Enter at the
+ * selection prompt also leaves the current model unchanged.
+ *
+ * @param {AppConfig} config - Validated API configuration used to retrieve
+ * available models.
+ * @param {ReadlineInterface} readline - Active CLI readline interface.
+ * @param {string} currentModel - Model currently selected for conversation
+ * turns.
+ * @returns {Promise<string>} Newly selected model, or currentModel when no
+ * valid change is made.
+ *
+ * Side effects: may perform an API request and writes choices, status, or
+ * validation messages to the terminal.
+ */
 async function selectModel(
   config: AppConfig,
   readline: ReadlineInterface,
@@ -334,6 +436,7 @@ async function selectModel(
         config,
       );
   } catch (error) {
+    // Model-list failure should not terminate an otherwise usable session.
     printCliError(
       error,
       "Model list retrieval",
@@ -397,6 +500,7 @@ async function selectModel(
     return currentModel;
   }
 
+  // Restrict input to decimal digits before converting it to an array index.
   if (
     !/^[0-9]+$/.test(
       answer,
@@ -409,6 +513,7 @@ async function selectModel(
     return currentModel;
   }
 
+  // Display numbering starts at one while JavaScript arrays start at zero.
   const selectedIndex =
     Number(answer) - 1;
 
@@ -430,6 +535,22 @@ async function selectModel(
   return selectedModel;
 }
 
+/**
+ * Displays the available permission modes and optionally changes the active
+ * PermissionController for the current session.
+ *
+ * Pressing Enter keeps the existing mode. Invalid selections are reported but
+ * do not throw or terminate the CLI. Selecting bypass mode prints an explicit
+ * warning because that mode disables tool approval prompts.
+ *
+ * @param {ReadlineInterface} readline - Active CLI readline interface.
+ * @param {PermissionController} controller - Mutable controller holding the
+ * session's current permission mode.
+ * @returns {Promise<void>} Resolves after the mode is kept or updated.
+ *
+ * Side effect: reads terminal input, writes status text, and may mutate the
+ * active PermissionController.
+ */
 async function selectPermissionMode(
   readline:
     ReadlineInterface,
@@ -514,6 +635,27 @@ async function selectPermissionMode(
   }
 }
 
+/**
+ * Runs a user-requested manual compaction of the current conversation context
+ * and prints the resulting compaction summary.
+ *
+ * The messages array is passed directly to the compaction runtime, which owns
+ * the actual context-reduction behavior and associated hook/session events.
+ *
+ * @param {AppConfig} config - Active application configuration.
+ * @param {string} activeModel - Model used when compaction requires model
+ * processing.
+ * @param {ChatMessage[]} messages - Mutable active conversation history.
+ * @param {HookRegistry} hookRegistry - Registry used for compaction hooks.
+ * @param {SessionLogger} sessionLogger - Logger used to record compaction
+ * activity.
+ * @returns {Promise<void>} Resolves after compaction completes and its result
+ * is displayed.
+ * @throws {Error} If the compaction runtime or one of its dependencies fails.
+ *
+ * Side effects: may make a model request, mutate active conversation context,
+ * write session records, execute hooks, and print terminal output.
+ */
 async function compactCurrentContext(
   config:
     AppConfig,
@@ -558,6 +700,36 @@ async function compactCurrentContext(
   console.log();
 }
 
+/**
+ * Completes one user conversation turn, including any model-request/tool-result
+ * cycles required before the model produces its final ordinary response.
+ *
+ * Each assistant response is logged and appended to conversation context. If
+ * it contains a Sky Code tool request, readline is paused while the tool runs,
+ * hooks are applied, the result is logged, and a synthetic tool-result message
+ * is added so the model can continue the same turn.
+ *
+ * Background-tool results may intentionally return control to the prompt
+ * immediately. Otherwise model/tool cycling continues until a normal response
+ * is produced or MAX_TOOL_ROUNDS is reached.
+ *
+ * @param {AppConfig} config - Active application/API configuration.
+ * @param {string} activeModel - Model used for this conversation turn.
+ * @param {ChatMessage[]} messages - Mutable conversation history.
+ * @param {ReadlineInterface} readline - Active terminal readline interface.
+ * @param {SessionLogger} sessionLogger - Current append-only session logger.
+ * @param {ToolHandlers} handlers - Tool implementations available to the
+ * model.
+ * @param {HookRegistry} hookRegistry - Hooks wrapped around tool execution.
+ * @param {string} systemPrompt - Current generated system prompt.
+ * @returns {Promise<void>} Resolves once control should return to the user.
+ * @throws {Error} If model streaming, logging, hook/tool execution fails, or
+ * the model exceeds MAX_TOOL_ROUNDS consecutive tool requests.
+ *
+ * Side effects: performs model requests, executes tools and hooks, mutates
+ * conversation history, pauses/resumes readline, writes session records, and
+ * writes response/tool status text to the terminal.
+ */
 async function completeConversationTurn(
   config: AppConfig,
   activeModel: string,
@@ -568,6 +740,8 @@ async function completeConversationTurn(
   hookRegistry: HookRegistry,
   systemPrompt: string,
 ): Promise<void> {
+  // One loop iteration represents one model response and, when requested, one
+  // associated tool execution before returning the result to the model.
   for (
     let toolRound = 0;
     toolRound <
@@ -585,6 +759,8 @@ async function completeConversationTurn(
     const assistantResponse =
       streamedTurn.responseText;
 
+    // Log the exact complete model response, including hidden sky-tool blocks,
+    // before parsing or executing any requested tool.
     await sessionLogger.append({
       type: "message",
       role: "assistant",
@@ -605,6 +781,8 @@ async function completeConversationTurn(
         assistantResponse,
     });
 
+    // No tool block means the assistant turn is finished and control can
+    // return to the interactive user prompt.
     if (!toolRequest) {
       if (
         streamedTurn.displayedText
@@ -621,6 +799,8 @@ async function completeConversationTurn(
       return;
     }
 
+    // Readline is paused while tool handlers may themselves interact with the
+    // terminal; this avoids competing reads and prompt redraw problems.
     readline.pause();
 
     let toolResult:
@@ -634,6 +814,8 @@ async function completeConversationTurn(
           hookRegistry,
         );
     } finally {
+      // Tool execution can alter terminal raw-mode state. Always resume the
+      // main interface and restore raw mode even when the tool throws.
       readline.resume();
 
       restoreReadlineRawMode(
@@ -668,6 +850,9 @@ async function completeConversationTurn(
         toolResult.success,
     });
 
+    // Some background-tool operations are complete once queued or otherwise
+    // handled asynchronously; they should return directly to the user prompt
+    // instead of automatically asking the model for another response.
     if (
       shouldReturnToPromptAfterBackgroundTool(
         toolRequest,
@@ -682,6 +867,8 @@ async function completeConversationTurn(
       return;
     }
 
+    // Tool results are represented as a user-role message for the next model
+    // request so the model can inspect the outcome and continue the same turn.
     messages.push({
       role: "user",
       content:
@@ -692,11 +879,29 @@ async function completeConversationTurn(
     });
   }
 
+  // Reaching this point means every allowed round requested another tool,
+  // indicating a likely model/tool loop rather than a completed turn.
   throw new Error(
     `Sky Code stopped after ${MAX_TOOL_ROUNDS} consecutive tool requests.`,
   );
 }
 
+/**
+ * Retrieves and combines tool definitions advertised by every connected MCP
+ * server.
+ *
+ * Connections are queried sequentially. If any server fails, its error is
+ * wrapped with that server's configured name so startup diagnostics identify
+ * the failing MCP source.
+ *
+ * @param {readonly McpConnection[]} connections - Active MCP connections whose
+ * tool catalogs should be queried.
+ * @returns {Promise<McpToolDefinition[]>} Combined MCP tool definitions in
+ * connection order.
+ * @throws {Error} If any MCP server fails to return its tool list.
+ *
+ * Side effect: performs list-tools requests against connected MCP servers.
+ */
 async function loadMcpTools(
   connections:
     readonly McpConnection[],
@@ -722,8 +927,34 @@ async function loadMcpTools(
   return tools;
 }
 
+/**
+ * Starts and runs the Sky Code interactive command-line application.
+ *
+ * Startup performs the following major phases:
+ * - handles the special `sky setup` command;
+ * - verifies that first-use configuration is available;
+ * - loads configuration and performs startup health checks;
+ * - discovers plugins, catalog skills, sub-agents, hooks, and MCP servers;
+ * - creates background-task, permission, tool, session, and readline state;
+ * - optionally resumes the previous conversation;
+ * - enters the interactive user-command and model-conversation loop;
+ * - cancels background work, finalizes the session log, and closes MCP
+ *   connections during shutdown.
+ *
+ * @returns {Promise<void>} Resolves after the CLI exits normally.
+ * @throws {Error} If a fatal startup or runtime operation cannot be recovered
+ * locally. The executable entry-point wrapper below reports these failures and
+ * sets a non-zero exit code.
+ *
+ * Side effects: reads configuration and session files, connects to network and
+ * MCP services, loads plugins, creates session logs, installs SIGINT handlers,
+ * performs model/tool requests, accepts terminal input, writes terminal output,
+ * and performs shutdown cleanup.
+ */
 export async function runCli():
   Promise<void> {
+  // `sky setup` is a standalone command and does not initialize the normal
+  // interactive runtime or any MCP/plugin/session resources.
   if (
     process.argv[2] ===
     "setup"
@@ -750,6 +981,8 @@ export async function runCli():
       ),
     );
 
+  // An environment-provided API URL is sufficient evidence that configuration
+  // may be available even when neither known on-disk configuration file exists.
   const hasEnvironmentApiUrl =
     typeof process.env
       .LITELLM_API_URL ===
@@ -759,6 +992,9 @@ export async function runCli():
       .trim() !==
       "";
 
+  // Provide a first-run instruction instead of letting loadConfig() fail with
+  // missing required values when none of the expected configuration sources
+  // appears to exist.
   if (
     !hasEnvironmentApiUrl &&
     !existsSync(
@@ -809,6 +1045,8 @@ export async function runCli():
         homedir(),
     });
 
+  // Plugin skills and catalog entries share command space, so conflicts must
+  // be rejected before an ambiguous interactive command can be accepted.
   validateCatalogPluginConflicts(
     initialCatalog,
     pluginSkills,
@@ -824,6 +1062,8 @@ export async function runCli():
       workingDirectory,
     });
 
+  // Keep snapshots locally because catalog-management commands can update both
+  // the available commands and the currently enabled catalog skills at runtime.
   let catalog =
     catalogManager
       .getSnapshot();
@@ -837,6 +1077,8 @@ export async function runCli():
       plugins,
     );
 
+  // User-configured and plugin-provided MCP definitions are merged before any
+  // connections are opened.
   const mcpServerConfigs =
     mergePluginMcpServers(
       config.mcpServers,
@@ -852,10 +1094,14 @@ export async function runCli():
       hookRegistry,
     );
 
+  // Background completion notifications may arrive while readline is active.
+  // The reporter accesses this variable lazily after the interface is created.
   let readlineForBackground:
     ReadlineInterface | null =
     null;
 
+  // These flags let background reporting decide whether it must redraw the
+  // interactive input line or defer output until assistant streaming finishes.
   let promptActive =
     false;
 
@@ -888,6 +1134,8 @@ export async function runCli():
           assistantOutputActive,
     });
 
+  // Session logging cannot be wired into background reports until the session
+  // logger is successfully created later in startup.
   let backgroundSessionReporter:
     ReturnType<
       typeof createBackgroundSessionReporter
@@ -903,12 +1151,15 @@ export async function runCli():
           task,
           event,
         ): Promise<void> => {
+          // Always report background state to the terminal first.
           await backgroundTerminalReporter(
             line,
             task,
             event,
           );
 
+          // Once session logging exists, mirror the same background event into
+          // the persistent session log.
           const sessionReporter =
             backgroundSessionReporter;
 
@@ -941,6 +1192,8 @@ export async function runCli():
         mcpConnections,
       );
   } catch (error) {
+    // If startup fails after one or more MCP connections were opened, close
+    // whatever was established before propagating the original startup error.
     try {
       await closeMcpConnections(
         mcpConnections,
@@ -960,6 +1213,8 @@ export async function runCli():
       config.defaultPermissionMode,
     );
 
+  // The system prompt is generated from the tool/skill/agent capabilities
+  // active at this moment. It is regenerated later when catalog state changes.
   let systemPrompt =
     createSkyCodeSystemPrompt(
       mcpTools,
@@ -1002,6 +1257,8 @@ export async function runCli():
       output,
     });
 
+  // Expose the now-created readline interface to asynchronous background
+  // terminal reporting.
   readlineForBackground =
     readline;
 
@@ -1019,6 +1276,8 @@ export async function runCli():
         workingDirectory,
       );
   } catch (error) {
+    // Broken or unreadable historical sessions should not prevent a new Sky
+    // Code conversation from starting.
     printCliError(
       error,
       "Session history inspection",
@@ -1064,6 +1323,8 @@ export async function runCli():
         resumeDecision ===
           "resume"
       ) {
+        // Copy only role/content pairs into live model context rather than
+        // retaining additional session-record metadata.
         for (
           const message of
           resumableSession.messages
@@ -1087,6 +1348,8 @@ export async function runCli():
         );
       }
     } catch (error) {
+      // A resume-selection problem is recoverable; start an empty conversation
+      // instead of failing the entire CLI.
       printCliError(
         error,
         "Session resume selection",
@@ -1105,6 +1368,8 @@ export async function runCli():
     sessionLogger =
       await createSessionLogger();
   } catch (error) {
+    // No interactive session should continue if its required audit/session log
+    // cannot be created. Clean up resources already initialized first.
     readline.close();
 
     readlineForBackground =
@@ -1121,6 +1386,8 @@ export async function runCli():
     throw error;
   }
 
+  // Background events can now be persisted because a live session logger
+  // exists.
   backgroundSessionReporter =
     createBackgroundSessionReporter(
       sessionLogger,
@@ -1133,6 +1400,8 @@ export async function runCli():
       activeModel,
   });
 
+  // Shutdown may be triggered through readline SIGINT, process SIGINT, or
+  // normal loop termination. Shared flags/promises keep cleanup idempotent.
   let shutdownRequested =
     false;
 
@@ -1144,6 +1413,15 @@ export async function runCli():
     Promise<void> | null =
     null;
 
+  /**
+   * Appends the session_end record at most once.
+   *
+   * Multiple shutdown paths can call this helper. Caching the first promise
+   * prevents duplicate session-end records while allowing every caller to wait
+   * on the same in-progress append.
+   *
+   * @returns {Promise<void>} Shared promise for session-end persistence.
+   */
   function saveSessionEnd():
     Promise<void> {
     if (
@@ -1160,6 +1438,11 @@ export async function runCli():
     return sessionEndPromise;
   }
 
+  /**
+   * Closes all MCP connections at most once during shutdown.
+   *
+   * @returns {Promise<void>} Shared promise representing MCP cleanup.
+   */
   function closeMcpOnce():
     Promise<void> {
     if (
@@ -1174,6 +1457,20 @@ export async function runCli():
     return mcpClosePromise;
   }
 
+  /**
+   * Initiates graceful shutdown in response to Ctrl+C.
+   *
+   * The first invocation cancels background tasks, finalizes the session log,
+   * closes MCP connections, prints the shutdown message, and closes readline.
+   * Later invocations return immediately so duplicate SIGINT events cannot
+   * launch overlapping cleanup sequences.
+   *
+   * @returns {void} Cleanup continues asynchronously after this function
+   * returns.
+   *
+   * Side effects: cancels tasks, writes session data, closes MCP connections,
+   * writes terminal output, and closes readline.
+   */
   function requestShutdown():
     void {
     if (
@@ -1184,6 +1481,8 @@ export async function runCli():
 
     shutdownRequested = true;
 
+    // The signal callback itself remains synchronous while the asynchronous
+    // cleanup sequence runs in a deliberately detached promise.
     void (async () => {
       try {
         await backgroundTaskRegistry
@@ -1219,10 +1518,13 @@ export async function runCli():
         "\nSky Code closed.\n",
       );
 
+      // Closing readline causes any pending question/main loop to terminate.
       readline.close();
     })();
   }
 
+  // Handle Ctrl+C originating through either readline or the process itself.
+  // requestShutdown() is idempotent, so both paths can safely point to it.
   readline.on(
     "SIGINT",
     requestShutdown,
@@ -1233,6 +1535,8 @@ export async function runCli():
     requestShutdown,
   );
 
+  // Display the effective runtime state after all startup components have
+  // initialized successfully.
   console.log(
     "Sky Code",
   );
@@ -1334,10 +1638,14 @@ export async function runCli():
   console.log();
 
   try {
+    // Each loop iteration accepts one non-empty user command/message and then
+    // either handles it locally or starts a model conversation turn.
     while (true) {
       let userInput: string;
 
       try {
+        // Background terminal reporting uses promptActive to know whether a
+        // notification must preserve and redraw the user's current input line.
         promptActive =
           true;
 
@@ -1347,6 +1655,8 @@ export async function runCli():
           )
         ).trim();
       } catch {
+        // Readline rejection typically means the interface was closed, such
+        // as during Ctrl+C shutdown. Leaving the loop triggers final cleanup.
         break;
       } finally {
         promptActive =
@@ -1359,6 +1669,8 @@ export async function runCli():
         continue;
       }
 
+      // Built-in local commands are processed before catalog/plugin/model
+      // conversation routing.
       if (
         userInput === "/model"
       ) {
@@ -1397,6 +1709,8 @@ export async function runCli():
             sessionLogger,
           );
         } catch (error) {
+          // Manual compaction failure is recoverable and must leave the active
+          // conversation history intact.
           printCliError(
             error,
             "Context compaction",
@@ -1443,6 +1757,8 @@ export async function runCli():
             userInput,
           );
       } catch (error) {
+        // Invalid history command syntax is a local command error, not a fatal
+        // CLI failure or model prompt.
         printCliError(
           error,
           "History command",
@@ -1512,12 +1828,16 @@ export async function runCli():
                 catalogManagementCommand,
               );
 
+          // Catalog management may enable, disable, add, or otherwise alter
+          // runtime catalog state, so refresh all cached catalog views.
           catalog =
             result.catalog;
 
           activeCatalogSkills =
             result.activeSkills;
 
+          // The model must immediately receive the revised skill set, requiring
+          // regeneration of the system prompt after catalog changes.
           systemPrompt =
             createSkyCodeSystemPrompt(
               mcpTools,
@@ -1563,6 +1883,8 @@ export async function runCli():
         continue;
       }
 
+      // Shell-type catalog commands are executed locally and do not become
+      // model conversation messages.
       if (
         resolvedCatalogCommand
           ?.kind ===
@@ -1598,6 +1920,9 @@ export async function runCli():
           pluginSkills,
         );
 
+      // Prompt-type catalog commands and plugin skill commands transform the
+      // raw terminal command into the text that should actually reach the
+      // model. Ordinary input is passed through unchanged.
       const conversationInput =
         resolvedCatalogCommand
           ?.kind ===
@@ -1614,6 +1939,8 @@ export async function runCli():
           conversationInput,
       });
 
+      // Persist what the person actually typed, not the expanded catalog or
+      // plugin prompt sent internally to the model.
       await sessionLogger.append({
         type: "message",
         role: "user",
@@ -1624,6 +1951,8 @@ export async function runCli():
       });
 
       try {
+        // Automatic compaction runs after the new user message enters context
+        // but before asking the model to answer it.
         const automaticCompactionResult =
           await runAutomaticContextCompaction({
             config,
@@ -1656,6 +1985,9 @@ export async function runCli():
           console.log();
         }
       } catch (error) {
+        // Automatic compaction is an optimization rather than a requirement
+        // for answering the user, so failure is reported and conversation
+        // processing continues with unchanged history.
         printCliError(
           error,
           "Automatic context compaction",
@@ -1668,6 +2000,8 @@ export async function runCli():
         console.log();
       }
 
+      // Background reporters use this flag to avoid injecting notifications
+      // into the middle of streamed assistant text.
       assistantOutputActive =
         true;
 
@@ -1705,6 +2039,9 @@ export async function runCli():
         const lastMessage =
           messages.at(-1);
 
+        // If model processing failed before adding anything beyond the current
+        // conversation input, remove that input from live model history. The
+        // original typed message remains recorded in the session log.
         if (
           lastMessage?.role ===
             "user" &&
@@ -1717,11 +2054,16 @@ export async function runCli():
         assistantOutputActive =
           false;
 
+        // Notifications deferred while the assistant was streaming can now be
+        // printed safely before the next user prompt appears.
         await backgroundTerminalReporter
           .flushPending();
       }
     }
   } finally {
+    // Normal loop exit and signal-driven shutdown converge here. Remove the
+    // process handler first, then repeat idempotent cleanup to ensure resources
+    // are closed even if requestShutdown() was never invoked.
     process.off(
       "SIGINT",
       requestShutdown,
@@ -1764,6 +2106,9 @@ export async function runCli():
   }
 }
 
+// Compare the canonical filesystem paths rather than raw URL/argv text so this
+// module runs the CLI only when it is the executable entry point, not when it
+// is imported by tests or another module.
 const currentFilePath =
   fileURLToPath(
     import.meta.url,
@@ -1782,6 +2127,8 @@ if (
   executedFilePath ===
   currentFilePath
 ) {
+  // Fatal errors escaping runCli() are formatted consistently and represented
+  // by a non-zero process exit status without bypassing normal Node teardown.
   runCli().catch(
     (error: unknown) => {
       printCliError(

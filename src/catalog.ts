@@ -1,3 +1,11 @@
+/**
+ * Custom command and skill catalog loading for Sky Code.
+ *
+ * Catalog entries are stored as JSON files under the user's Sky Code home
+ * directory. This module validates their schema, protects built-in command
+ * names, loads entries deterministically, rejects duplicates, and exposes a
+ * normalized snapshot for command/skill runtime consumers.
+ */
 import {
   mkdir,
   readFile,
@@ -13,94 +21,152 @@ import {
   join,
 } from "node:path";
 
+/**
+ * Supported top-level catalog entry categories.
+ */
 export type CatalogItemType =
   | "command"
   | "skill";
 
+/**
+ * Origin of a catalog item.
+ *
+ * `catalog` identifies user-managed JSON files in the catalog directory, while
+ * `plugin` identifies items contributed by plugin integration.
+ */
 export type CatalogItemSource =
   | "catalog"
   | "plugin";
 
+/**
+ * Common metadata shared by every command and skill catalog item.
+ */
 export interface CatalogItemBase {
+  /** Discriminates commands from skills. */
   type:
     CatalogItemType;
 
+  /** Validated item name used for lookup and display. */
   name:
     string;
 
+  /** Human-readable explanation of what the item does. */
   description:
     string;
 
+  /** Indicates whether the item came from the local catalog or a plugin. */
   source:
     CatalogItemSource;
 
+  /** Source file path retained for diagnostics and duplicate reporting. */
   filePath:
     string;
 }
 
+/**
+ * Catalog command that expands to an AI prompt rather than executing a shell
+ * command.
+ */
 export interface CatalogPromptCommand
   extends CatalogItemBase {
   type:
     "command";
 
+  /** Prompt text submitted through the normal conversational command flow. */
   prompt:
     string;
 
+  /** Prevents prompt commands from also defining shell execution text. */
   shell?:
     never;
 }
 
+/**
+ * Catalog command that executes configured shell text.
+ */
 export interface CatalogShellCommand
   extends CatalogItemBase {
   type:
     "command";
 
+  /** Shell command text associated with this catalog command. */
   shell:
     string;
 
+  /** Prevents shell commands from also defining prompt text. */
   prompt?:
     never;
 }
 
+/**
+ * Validated catalog command, discriminated by whether it contains `prompt` or
+ * `shell` content.
+ */
 export type CatalogCommand =
   | CatalogPromptCommand
   | CatalogShellCommand;
 
+/**
+ * Catalog skill that contributes additional instructions to the model's system
+ * prompt when activated.
+ */
 export interface CatalogSkill
   extends CatalogItemBase {
   type:
     "skill";
 
+  /** Additional system-prompt instructions supplied by this skill. */
   systemPromptAddition:
     string;
 }
 
+/**
+ * Any validated catalog entry.
+ */
 export type CatalogItem =
   | CatalogCommand
   | CatalogSkill;
 
+/**
+ * Fully loaded and validated view of one catalog directory.
+ */
 export interface CatalogSnapshot {
+  /** Catalog directory that was loaded. */
   directory:
     string;
 
+  /** Validated commands sorted by command name. */
   commands:
     CatalogCommand[];
 
+  /** Validated skills sorted by skill name. */
   skills:
     CatalogSkill[];
 
+  /** Combined command-then-skill list exposed to general catalog consumers. */
   items:
     CatalogItem[];
 }
 
+/**
+ * Optional directory overrides used when loading a catalog.
+ */
 export interface LoadCatalogOptions {
+  /** Home directory used to derive the default `.sky-code/catalog` path. */
   homeDirectory?:
     string;
 
+  /** Explicit catalog path; when supplied, it takes precedence over homeDirectory. */
   catalogDirectory?:
     string;
 }
 
+/**
+ * Built-in slash commands that user catalog files may not override.
+ *
+ * Keeping these names reserved prevents custom catalog entries from shadowing
+ * core Sky Code control commands.
+ */
 export const RESERVED_CATALOG_COMMANDS =
   new Set<string>([
     "/model",
@@ -111,6 +177,14 @@ export const RESERVED_CATALOG_COMMANDS =
     "/history",
   ]);
 
+/**
+ * Checks whether an unknown JSON value is a non-null, non-array object.
+ *
+ * @param {unknown} value - Value to inspect.
+ * @returns {boolean} True when the value can be treated as a string-keyed record.
+ *
+ * Side effects: none.
+ */
 function isRecord(
   value:
     unknown,
@@ -129,6 +203,17 @@ function isRecord(
   );
 }
 
+/**
+ * Validates and normalizes a required string field from a catalog JSON object.
+ *
+ * @param {unknown} value - Raw field value.
+ * @param {string} fieldName - Field name used in validation errors.
+ * @param {string} filePath - Catalog file path used for diagnostic context.
+ * @returns {string} Trimmed non-empty string.
+ * @throws {Error} If the value is not a string or contains only whitespace.
+ *
+ * Side effects: none.
+ */
 function requireNonEmptyString(
   value:
     unknown,
@@ -153,6 +238,19 @@ function requireNonEmptyString(
   return value.trim();
 }
 
+/**
+ * Validates a catalog slash-command name.
+ *
+ * Names must start with `/`, use lowercase letters, numbers, hyphens, or
+ * underscores, and must not conflict with a reserved built-in Sky Code command.
+ *
+ * @param {unknown} value - Raw command-name value.
+ * @param {string} filePath - Catalog file path used for diagnostic context.
+ * @returns {string} Validated command name.
+ * @throws {Error} If the name is empty, malformed, or reserved.
+ *
+ * Side effects: none.
+ */
 function validateCommandName(
   value:
     unknown,
@@ -190,6 +288,16 @@ function validateCommandName(
   return name;
 }
 
+/**
+ * Validates a catalog skill name.
+ *
+ * @param {unknown} value - Raw skill-name value.
+ * @param {string} filePath - Catalog file path used for diagnostic context.
+ * @returns {string} Validated lowercase skill name.
+ * @throws {Error} If the name is empty or contains unsupported characters.
+ *
+ * Side effects: none.
+ */
 function validateSkillName(
   value:
     unknown,
@@ -217,6 +325,22 @@ function validateSkillName(
   return name;
 }
 
+/**
+ * Converts a validated JSON record into a prompt or shell catalog command.
+ *
+ * Exactly one of `prompt` and `shell` must be supplied. Shared metadata and the
+ * selected command body are normalized before the discriminated command object
+ * is returned.
+ *
+ * @param {Record<string, unknown>} value - Raw command JSON object.
+ * @param {string} filePath - Source path used for provenance and errors.
+ * @param {CatalogItemSource} source - Origin assigned to the parsed command.
+ * @returns {CatalogCommand} Validated prompt-command or shell-command object.
+ * @throws {Error} If required fields are invalid, the name is reserved, or both
+ * or neither of `prompt` and `shell` are defined.
+ *
+ * Side effects: none.
+ */
 function parseCommand(
   value:
     Record<
@@ -322,6 +446,17 @@ function parseCommand(
   };
 }
 
+/**
+ * Converts a catalog JSON record into a validated skill.
+ *
+ * @param {Record<string, unknown>} value - Raw skill JSON object.
+ * @param {string} filePath - Source path used for provenance and errors.
+ * @param {CatalogItemSource} source - Origin assigned to the parsed skill.
+ * @returns {CatalogSkill} Validated skill with normalized required strings.
+ * @throws {Error} If the name, description, or systemPromptAddition is invalid.
+ *
+ * Side effects: none.
+ */
 function parseSkill(
   value:
     Record<
@@ -366,6 +501,23 @@ function parseSkill(
   };
 }
 
+/**
+ * Parses one unknown JSON value into a validated catalog item.
+ *
+ * The value must be a JSON object with a supported `type`. Command and skill
+ * validation is delegated to their specialized parsers. The default source is
+ * `catalog`, while plugin callers may explicitly identify plugin-provided items.
+ *
+ * @param {unknown} value - Parsed JSON value to validate.
+ * @param {string} filePath - Source path retained on the resulting item and used
+ * in validation messages.
+ * @param {CatalogItemSource} source - Item origin; defaults to `catalog`.
+ * @returns {CatalogItem} Validated command or skill.
+ * @throws {Error} If the value is not an object, has an invalid type, or fails
+ * command/skill validation.
+ *
+ * Side effects: none.
+ */
 export function parseCatalogItem(
   value:
     unknown,
@@ -418,6 +570,15 @@ export function parseCatalogItem(
   }
 }
 
+/**
+ * Resolves the default Sky Code catalog directory for a home directory.
+ *
+ * @param {string} homeDirectory - Home directory root; defaults to node:os
+ * homedir().
+ * @returns {string} `<homeDirectory>/.sky-code/catalog`.
+ *
+ * Side effects: none.
+ */
 export function getCatalogDirectory(
   homeDirectory:
     string =
@@ -430,6 +591,19 @@ export function getCatalogDirectory(
   );
 }
 
+/**
+ * Reads, parses, and validates one catalog JSON file.
+ *
+ * Read failures and JSON parse failures are wrapped with the source path so a
+ * user can identify the exact catalog file that needs correction.
+ *
+ * @param {string} filePath - JSON catalog file to load.
+ * @returns {Promise<CatalogItem>} Validated catalog item from the file.
+ * @throws {Error} If the file cannot be read, JSON cannot be parsed, or the
+ * parsed item fails catalog validation.
+ *
+ * Side effects: reads the catalog file from disk.
+ */
 async function loadCatalogFile(
   filePath:
     string,
@@ -483,6 +657,19 @@ async function loadCatalogFile(
   );
 }
 
+/**
+ * Rejects duplicate command names and duplicate skill names.
+ *
+ * Commands and skills have separate namespaces, so a command and a skill may
+ * share a name. Duplicate diagnostics include both source file paths.
+ *
+ * @param {readonly CatalogCommand[]} commands - Commands to check.
+ * @param {readonly CatalogSkill[]} skills - Skills to check.
+ * @returns {void}
+ * @throws {Error} If two commands share a name or two skills share a name.
+ *
+ * Side effects: none.
+ */
 function rejectDuplicateItems(
   commands:
     readonly CatalogCommand[],
@@ -551,6 +738,26 @@ function rejectDuplicateItems(
   }
 }
 
+/**
+ * Loads the local Sky Code catalog into a deterministic validated snapshot.
+ *
+ * The target directory is created if necessary with owner-only mode 0700.
+ * Only regular files with a case-insensitive `.json` extension are considered.
+ * File names are sorted before sequential loading so read/validation order is
+ * stable; commands and skills are then independently sorted by item name.
+ *
+ * Duplicate names are rejected after all files have been parsed. The combined
+ * `items` array intentionally places sorted commands before sorted skills.
+ *
+ * @param {LoadCatalogOptions} options - Optional home/catalog directory overrides.
+ * @returns {Promise<CatalogSnapshot>} Loaded directory plus sorted commands,
+ * skills, and combined items.
+ * @throws {Error} If directory access fails, a catalog file cannot be loaded or
+ * validated, or duplicate command/skill names are found.
+ *
+ * Side effects: creates the catalog directory when absent and reads catalog JSON
+ * files from disk.
+ */
 export async function loadCatalog(
   options:
     LoadCatalogOptions = {},

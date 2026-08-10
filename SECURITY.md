@@ -15,7 +15,7 @@ privately rather than opening a public GitHub issue.
 **How to report:**
 - Open a [GitHub Security Advisory](https://github.com/quecat01/SkyCode/security/advisories/new)
   on this repository, or
-- Email the maintainers at security@cpnet.ca
+- Email the maintainers at security @ cpnet.ca
 
 Please include:
 - A description of the vulnerability

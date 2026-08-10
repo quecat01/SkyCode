@@ -1,11 +1,32 @@
+/**
+ * CLI error normalization, credential redaction, and recovery guidance.
+ *
+ * This module converts arbitrary failures into short, consistent terminal
+ * messages while removing several common credential forms and suggesting a
+ * practical next step for recognized error categories.
+ */
+
+/**
+ * Context used to turn an arbitrary failure into consistent CLI output.
+ */
 export interface CliErrorReportOptions {
+  /** Human-readable operation name shown in the first failure line. */
   operation:
     string;
 
+  /** Optional explicit recovery guidance that overrides inferred advice. */
   nextStep?:
     string;
 }
 
+/**
+ * Converts an unknown thrown value into displayable error text.
+ *
+ * @param {unknown} error - Error instance or arbitrary thrown value.
+ * @returns {string} Error.message for Error instances, otherwise String(error).
+ *
+ * Side effects: none.
+ */
 function getErrorMessage(
   error:
     unknown,
@@ -22,6 +43,19 @@ function getErrorMessage(
   );
 }
 
+/**
+ * Redacts common credential forms before an error message reaches the terminal.
+ *
+ * The current patterns cover Bearer tokens, common API-key assignments, and
+ * `api_key`/`api-key`/`token` query parameters. This is defensive output
+ * sanitization, not a general-purpose secret scanner.
+ *
+ * @param {string} value - Raw error text that may contain credentials.
+ * @returns {string} Text with recognized sensitive values replaced by
+ * `[redacted]`.
+ *
+ * Side effects: none.
+ */
 function redactSensitiveValues(
   value:
     string,
@@ -41,6 +75,19 @@ function redactSensitiveValues(
     );
 }
 
+/**
+ * Sanitizes and flattens error text for compact CLI reporting.
+ *
+ * Sensitive values are redacted first. CRLF line endings are normalized,
+ * blank lines are discarded, remaining lines are trimmed and joined with
+ * spaces, and repeated whitespace is collapsed. Empty results receive a
+ * deterministic fallback message.
+ *
+ * @param {string} value - Raw error message text.
+ * @returns {string} Redacted single-line error reason.
+ *
+ * Side effects: none.
+ */
 function normalizeMessage(
   value:
     string,
@@ -84,6 +131,19 @@ function normalizeMessage(
     : normalized;
 }
 
+/**
+ * Infers concise recovery guidance from a normalized error message.
+ *
+ * Checks are intentionally ordered from specific filesystem/authentication and
+ * endpoint failures through broader network, timeout, JSON, and usage/config
+ * errors. The first matching category wins.
+ *
+ * @param {string} message - Normalized error message to classify.
+ * @returns {string | null} Suggested next step, or null when no known pattern
+ * matches.
+ *
+ * Side effects: none.
+ */
 function inferNextStep(
   message:
     string,
@@ -155,6 +215,14 @@ function inferNextStep(
   return null;
 }
 
+/**
+ * Normalizes the operation label used in CLI error headings.
+ *
+ * @param {string} operation - Caller-provided operation description.
+ * @returns {string} Trimmed operation name, or `Operation` when empty.
+ *
+ * Side effects: none.
+ */
 function normalizeOperation(
   operation:
     string,
@@ -168,6 +236,21 @@ function normalizeOperation(
     : normalized;
 }
 
+/**
+ * Formats an arbitrary failure as consistent, user-facing CLI report lines.
+ *
+ * The error reason is converted to text, redacted, and normalized before
+ * display. A non-empty explicit nextStep takes precedence over inferred
+ * recovery guidance. The result always contains operation and reason lines,
+ * with a third `Next step:` line only when guidance is available.
+ *
+ * @param {unknown} error - Failure value to report.
+ * @param {CliErrorReportOptions} options - Operation label and optional explicit
+ * recovery guidance.
+ * @returns {string[]} Ordered terminal-ready error report lines.
+ *
+ * Side effects: none.
+ */
 export function formatCliErrorReport(
   error:
     unknown,
