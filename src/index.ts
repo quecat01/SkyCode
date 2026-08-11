@@ -177,6 +177,20 @@ import {
   formatError,
 } from "./utils.js";
 
+/**
+ * ANSI-coloured startup banner displayed when SkyCode launches.
+ *
+ * Uses bright magenta (\x1b[95m) for the tilde arc motif and the "Code"
+ * portion of the wordmark, and white (\x1b[97m) for "Sky". The
+ * process.stdout.isTTY check prevents ANSI escape codes from being emitted
+ * when output is piped or redirected, so non-terminal output receives the
+ * plain-text version instead. The reset code (\x1b[0m) returns subsequent
+ * terminal text to its normal colour.
+ */
+const SKYCODE_BANNER = process.stdout.isTTY
+  ? '\x1b[95m  ~ ~ ~\x1b[0m\n\x1b[95m ~ ~ ~ ~\x1b[0m\n\x1b[97mSky\x1b[0m\x1b[95mCode\x1b[0m'
+  : '  ~ ~ ~\n ~ ~ ~ ~\nSkyCode';
+
 // Limit a single conversational turn to twenty consecutive model-request/tool
 // cycles. This prevents a malformed or looping model response from invoking
 // tools indefinitely without returning control to the user.
@@ -882,7 +896,7 @@ async function completeConversationTurn(
   // Reaching this point means every allowed round requested another tool,
   // indicating a likely model/tool loop rather than a completed turn.
   throw new Error(
-    `Sky Code stopped after ${MAX_TOOL_ROUNDS} consecutive tool requests.`,
+    `SkyCode stopped after ${MAX_TOOL_ROUNDS} consecutive tool requests.`,
   );
 }
 
@@ -1005,7 +1019,7 @@ export async function runCli():
     )
   ) {
     console.log(
-      "Sky Code is not configured yet.",
+      "SkyCode is not configured yet.",
     );
 
     console.log(
@@ -1487,7 +1501,7 @@ export async function runCli():
       try {
         await backgroundTaskRegistry
           .cancelAll(
-            "Sky Code is closing.",
+            "SkyCode is closing.",
           );
       } catch (error) {
         printCliError(
@@ -1515,7 +1529,7 @@ export async function runCli():
       }
 
       output.write(
-        "\nSky Code closed.\n",
+        "\nSkyCode closed.\n",
       );
 
       // Closing readline causes any pending question/main loop to terminate.
@@ -1538,7 +1552,7 @@ export async function runCli():
   // Display the effective runtime state after all startup components have
   // initialized successfully.
   console.log(
-    "Sky Code",
+    SKYCODE_BANNER,
   );
 
   console.log(
@@ -1632,7 +1646,7 @@ export async function runCli():
   );
 
   console.log(
-    "Press Ctrl+C to close Sky Code.",
+    "Press Ctrl+C to close SkyCode.",
   );
 
   console.log();
@@ -2006,7 +2020,7 @@ export async function runCli():
         true;
 
       output.write(
-        "Sky Code: ",
+        "SkyCode: ",
       );
 
       try {
@@ -2075,7 +2089,7 @@ export async function runCli():
     try {
       await backgroundTaskRegistry
         .cancelAll(
-          "Sky Code is closing.",
+          "SkyCode is closing.",
         );
     } catch (error) {
       printCliError(
@@ -2133,7 +2147,7 @@ if (
     (error: unknown) => {
       printCliError(
         error,
-        "Sky Code startup",
+        "SkyCode startup",
       );
 
       process.exitCode = 1;

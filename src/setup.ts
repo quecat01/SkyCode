@@ -33,6 +33,20 @@ import {
   join,
 } from "node:path";
 
+/**
+ * ANSI-coloured startup banner displayed when SkyCode launches.
+ *
+ * Uses bright magenta (\x1b[95m) for the tilde arc motif and the "Code"
+ * portion of the wordmark, and white (\x1b[97m) for "Sky". The
+ * process.stdout.isTTY check prevents ANSI escape codes from being emitted
+ * when output is piped or redirected, so non-terminal output receives the
+ * plain-text version instead. The reset code (\x1b[0m) returns subsequent
+ * terminal text to its normal colour.
+ */
+const SKYCODE_BANNER = process.stdout.isTTY
+  ? '\x1b[95m  ~ ~ ~\x1b[0m\n\x1b[95m ~ ~ ~ ~\x1b[0m\n\x1b[97mSky\x1b[0m\x1b[95mCode\x1b[0m'
+  : '  ~ ~ ~\n ~ ~ ~ ~\nSkyCode';
+
 // Default to the conventional local LiteLLM endpoint when the user presses
 // Enter without supplying a different OpenAI-compatible API base URL.
 const DEFAULT_API_URL =
@@ -1038,7 +1052,7 @@ async function runSetupWizard(
           type: "confirm",
           name: "reconfigure",
           message:
-            "Sky Code is already configured. Reconfigure?",
+            "SkyCode is already configured. Reconfigure?",
           default:
             false,
         },
@@ -1055,7 +1069,7 @@ async function runSetupWizard(
 
   console.log();
   console.log(
-    "Welcome to Sky Code Setup",
+    SKYCODE_BANNER,
   );
 
   console.log(
@@ -1063,7 +1077,7 @@ async function runSetupWizard(
   );
 
   console.log(
-    "This wizard will configure Sky Code for first use.",
+    "This wizard will configure SkyCode for first use.",
   );
 
   console.log(
@@ -1251,7 +1265,7 @@ async function runSetupWizard(
 
   console.log();
   console.log(
-    "Setup complete. Run 'sky' to start Sky Code.",
+    "Setup complete. Run 'sky' to start SkyCode.",
   );
 }
 

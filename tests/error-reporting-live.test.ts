@@ -92,7 +92,7 @@ describe(
           [
             "      printCliError(",
             "        error,",
-            '        "Sky Code startup",',
+            '        "SkyCode startup",',
             "      );",
           ].join(
             "\n",

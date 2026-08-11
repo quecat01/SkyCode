@@ -944,7 +944,7 @@ describe(
         expect(
           logSpy,
         ).toHaveBeenCalledWith(
-          "Sky Code is not configured yet.",
+          "SkyCode is not configured yet.",
         );
 
         expect(
