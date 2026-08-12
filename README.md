@@ -1,12 +1,13 @@
-# Sky Code
+# SkyCode
 
-Sky Code is an interactive command-line AI coding assistant for Linux, designed for developers who want AI-assisted coding directly in the terminal.
+SkyCode is an interactive command-line AI coding assistant for Linux, designed for developers who want AI-assisted coding directly in the terminal.
 
-Sky Code requires Node.js 20 or newer and works with LiteLLM or any OpenAI-compatible API endpoint, including self-hosted LiteLLM, Ollama, OpenAI directly, and OpenRouter.
+SkyCode requires Node.js 20 or newer and works with LiteLLM or any OpenAI-compatible API endpoint, including self-hosted LiteLLM, Ollama, OpenAI directly, and OpenRouter.
 
 It supports:
 
 - Interactive first-time setup wizard
+- Setup diagnostics with ten environment, connectivity, and configuration checks
 - Streamed AI conversations
 - Live model selection
 - File reading, writing, and editing
@@ -37,7 +38,7 @@ The internal package, repository, and project-folder name is `sky-code`.
 
 ## Requirements and Tested Platforms
 
-Sky Code requires:
+SkyCode requires:
 
 - Linux
 - Node.js 20 or newer
@@ -45,7 +46,7 @@ Sky Code requires:
 - LiteLLM or another OpenAI-compatible API endpoint
 - An API key when required by the configured endpoint
 
-Sky Code has been tested on DietPi, a Debian-based Linux distribution.
+SkyCode has been tested on DietPi, a Debian-based Linux distribution.
 
 ## Install Prerequisites on Linux
 
@@ -98,7 +99,7 @@ npm -v
 command -v node
 ```
 
-## Install Sky Code
+## Install SkyCode
 
 Clone the repository:
 
@@ -131,7 +132,11 @@ Run the setup wizard to configure your endpoint, API key, default model, and per
 sky setup
 ```
 
-The wizard will guide you through each step, test the connection to your AI endpoint, and write your configuration automatically. When setup is complete, start Sky Code with:
+The wizard will guide you through each step, test the connection to your AI endpoint, and write your configuration automatically.
+
+If anything is not working after setup, run `sky diagnose` to check all ten configuration and connectivity conditions before starting the assistant.
+
+When setup is complete, start SkyCode with:
 
 ```bash
 sky
@@ -139,7 +144,7 @@ sky
 
 ### Manual Configuration (Alternative to `sky setup`)
 
-If you prefer to configure Sky Code manually instead of using the wizard, create the environment file:
+If you prefer to configure SkyCode manually instead of using the wizard, create the environment file:
 
 ```bash
 cp .env.example .env
@@ -167,7 +172,7 @@ Never commit `.env` to version control.
 
 ## Environment Variables
 
-Sky Code uses these client-side environment-variable names:
+SkyCode uses these client-side environment-variable names:
 
 ```text
 LITELLM_API_URL
@@ -178,7 +183,7 @@ LITELLM_API_KEY
 
 `LITELLM_API_KEY` is the API key sent to the configured endpoint.
 
-The LiteLLM server may store the same key under the server-side name `LITELLM_MASTER_KEY`. Do not use that variable name on the Sky Code client.
+The LiteLLM server may store the same key under the server-side name `LITELLM_MASTER_KEY`. Do not use that variable name on the SkyCode client.
 
 Environment variables are loaded from these locations, checked in order:
 
@@ -283,7 +288,7 @@ Example:
 
 #### `defaultModel`
 
-The model selected when Sky Code starts.
+The model selected when SkyCode starts.
 
 Example:
 
@@ -293,7 +298,7 @@ Example:
 
 #### `defaultPermissionMode`
 
-The permission mode selected when Sky Code starts.
+The permission mode selected when SkyCode starts.
 
 Allowed values are:
 
@@ -321,7 +326,7 @@ An array of additional directories to scan for `.sky-code-plugin` folders.
 
 An absolute path is used directly.
 
-A relative path is resolved from the project directory where Sky Code was started.
+A relative path is resolved from the project directory where SkyCode was started.
 
 Every entry must be a non-empty string.
 
@@ -339,7 +344,7 @@ A lower value triggers compaction more frequently. A higher value allows a large
 
 #### `compactionStrategy`
 
-Controls how Sky Code reduces older conversation material.
+Controls how SkyCode reduces older conversation material.
 
 Allowed values are:
 
@@ -374,7 +379,7 @@ This setting is used only by the `sliding-window` strategy.
 
 ### stdio MCP Server
 
-A stdio server is a local process started by Sky Code.
+A stdio server is a local process started by SkyCode.
 
 Required fields:
 
@@ -471,11 +476,11 @@ WebSocket URLs beginning with `ws://` or `wss://` are rejected for both SSE and 
 
 Every header value must be a string.
 
-## Run Sky Code
+## Run SkyCode
 
 ### First-Time Setup
 
-If Sky Code has not been configured yet, run the setup wizard first:
+If SkyCode has not been configured yet, run the setup wizard first:
 
 ```bash
 sky setup
@@ -483,22 +488,24 @@ sky setup
 
 The wizard will ask for your API endpoint URL, API key, default model, and permission mode, test the connection, and write your configuration automatically.
 
-If you run `sky` before completing setup, Sky Code will display:
+If you run `sky` before completing setup, SkyCode will display:
 
 ```text
-Sky Code is not configured yet.
+SkyCode is not configured yet.
 Run 'sky setup' to get started.
 ```
 
-### Starting Sky Code
+If SkyCode starts but cannot connect to your AI endpoint, run `sky diagnose` for a detailed report of what is and is not working.
 
-Start Sky Code from any directory:
+### Starting SkyCode
+
+Start SkyCode from any directory:
 
 ```bash
 sky
 ```
 
-Before displaying the normal chat prompt, Sky Code performs a silent startup health check.
+Before displaying the normal chat prompt, SkyCode performs a silent startup health check.
 
 It verifies:
 
@@ -508,13 +515,13 @@ It verifies:
 
 When all checks pass, startup continues normally without an extra success message.
 
-If a check fails, Sky Code displays a plain-language explanation before the chat prompt appears. The message identifies the failed startup operation and explains what configuration or service should be checked.
+If a check fails, SkyCode displays a plain-language explanation before the chat prompt appears. The message identifies the failed startup operation and explains what configuration or service should be checked.
 
 ### Session Resume on Startup
 
-Sky Code associates session history with the directory where it was started.
+SkyCode associates session history with the directory where it was started.
 
-When a previous session exists for that directory, Sky Code asks whether to:
+When a previous session exists for that directory, SkyCode asks whether to:
 
 1. Resume the previous conversation
 2. Start with a fresh conversation
@@ -537,13 +544,13 @@ The startup display reports:
 - MCP-server count
 - MCP-tool count
 
-Close Sky Code with:
+Close SkyCode with:
 
 ```text
 Ctrl+C
 ```
 
-Sky Code writes a final `session_end` record before closing.
+SkyCode writes a final `session_end` record before closing.
 
 ## Built-in Commands
 
@@ -565,7 +572,48 @@ The wizard guides you through:
 
 Configuration is written to `~/.sky-code/config.json` and `~/.sky-code/.env`.
 
-If Sky Code is already configured, the wizard asks before overwriting existing settings.
+If SkyCode is already configured, the wizard asks before overwriting existing settings.
+
+### `sky diagnose`
+
+Runs ten diagnostic checks and reports what is working and what is not. Works before SkyCode is fully configured — does not require a working LiteLLM connection.
+
+```bash
+sky diagnose
+```
+
+The checks cover:
+
+- Node.js version (v20 or newer required)
+- `LITELLM_API_URL` is set and is a valid URL
+- `LITELLM_API_KEY` is set (value is never shown)
+- LiteLLM server is reachable
+- Authentication succeeds
+- At least one model is available
+- The configured default model is in the model list
+- `~/.sky-code/config.json` exists and is valid
+- `~/.sky-code/sessions/` is writable
+
+Each check shows ✓ (pass), ✗ (fail), or a skipped notice when a prerequisite failed. A summary line at the end shows how many checks failed.
+
+Example output:
+
+```text
+SkyCode Diagnostics
+────────────────────────────────────────────
+✓ Node.js version     v24.18.0  (v20+ required)
+✓ LITELLM_API_URL     set  →  http://your-host:4000/v1
+✓ LITELLM_API_KEY     set  (value hidden)
+✓ URL format          valid
+✓ LiteLLM reachable   200 OK  →  8 models found
+✓ Authentication      ok
+✓ Models available    8 models
+✓ Default model       chatgpt-gpt-5.5  ✓ in model list
+✓ Config file         ~/.sky-code/config.json  (valid)
+✓ Session directory   ~/.sky-code/sessions/  (writable)
+
+All checks passed.
+```
 
 ### `/model`
 
@@ -595,9 +643,19 @@ Example:
 /compact
 ```
 
-After compaction, Sky Code displays a one-line report showing how many turns were compacted and the estimated token reduction.
+After compaction, SkyCode displays a one-line report showing how many turns were compacted and the estimated token reduction.
 
-If the conversation does not contain enough older material to compact, Sky Code reports that compaction was not needed and leaves the active history unchanged.
+If the conversation does not contain enough older material to compact, SkyCode reports that compaction was not needed and leaves the active history unchanged.
+
+### `/diagnose`
+
+Runs the same ten diagnostic checks as `sky diagnose` and prints the report inline without interrupting the session.
+
+Example:
+
+```text
+/diagnose
+```
 
 ### `/tasks`
 
@@ -670,7 +728,7 @@ Example:
 /catalog enable careful-review
 ```
 
-The active system prompt is updated immediately. Sky Code does not need to restart.
+The active system prompt is updated immediately. SkyCode does not need to restart.
 
 ### `/catalog disable <name>`
 
@@ -708,7 +766,7 @@ While a background task is running:
 - Started, progress, completed, failed, and cancelled events are recorded in the JSONL session log
 - The `Notification` hook fires when a task starts, completes, or fails
 
-If Sky Code closes while a background task is running, the task is cancelled cleanly and the cancellation is recorded.
+If SkyCode closes while a background task is running, the task is cancelled cleanly and the cancellation is recorded.
 
 Use:
 
@@ -728,7 +786,7 @@ to cancel one.
 
 ## Configurable Context Compaction
 
-Sky Code can reduce a growing active conversation automatically or when `/compact` is entered.
+SkyCode can reduce a growing active conversation automatically or when `/compact` is entered.
 
 The compaction settings are stored in global or project `config.json`:
 
@@ -796,7 +854,7 @@ Custom commands and skills are stored as individual JSON files under:
 ~/.sky-code/catalog/
 ```
 
-Catalog changes take effect immediately in the current session. Sky Code does not need to restart.
+Catalog changes take effect immediately in the current session. SkyCode does not need to restart.
 
 Catalog commands and skills are also available through the plugin system so plugins can bundle them.
 
@@ -887,11 +945,11 @@ Example:
 /history search build failed
 ```
 
-Sky Code returns matching turns with their timestamps.
+SkyCode returns matching turns with their timestamps.
 
 ## Cleaner Error Messages
 
-Sky Code reports startup, model, catalog, history, compaction, background-task, and shutdown failures in plain language.
+SkyCode reports startup, model, catalog, history, compaction, background-task, and shutdown failures in plain language.
 
 Instead of exposing raw internal error objects or full stack traces during normal CLI use, it reports:
 
@@ -903,7 +961,7 @@ Credential-like values are removed from formatted error output.
 
 ## Local and Extended Tools
 
-Sky Code supports these tool names:
+SkyCode supports these tool names:
 
 ```text
 read_file
@@ -951,7 +1009,7 @@ The edit is rejected when the old text is missing or appears more than once.
 
 ### `run_shell_command`
 
-Runs a command through `/bin/bash` in Sky Code's current working directory.
+Runs a command through `/bin/bash` in SkyCode's current working directory.
 
 Argument:
 
@@ -995,7 +1053,7 @@ The model requests a tool using a fenced `sky-tool` block:
 ```
 ````
 
-Sky Code parses the JSON, executes the appropriate permission-aware handler, returns the result to the model, and lets the model continue.
+SkyCode parses the JSON, executes the appropriate permission-aware handler, returns the result to the model, and lets the model continue.
 
 The protocol works even when the selected model does not support native function calling.
 
@@ -1021,7 +1079,7 @@ Shell commands still require approval.
 
 No tool performs its real action.
 
-Sky Code returns a description of the operation it would have performed.
+SkyCode returns a description of the operation it would have performed.
 
 This includes file operations, shell commands, MCP calls, and sub-agent delegation.
 
@@ -1047,7 +1105,7 @@ plugin.json
 
 ### Plugin Discovery Locations
 
-Sky Code checks these locations when it starts.
+SkyCode checks these locations when it starts.
 
 #### Current project plugin
 
@@ -1057,7 +1115,7 @@ CURRENT_PROJECT/.sky-code-plugin/
 
 #### Global plugins
 
-Sky Code recursively searches under:
+SkyCode recursively searches under:
 
 ```text
 ~/.sky-code/plugins/
@@ -1071,7 +1129,7 @@ A global plugin may therefore be stored at:
 
 #### Configured plugin directories
 
-Sky Code recursively searches every path in `pluginDirs`.
+SkyCode recursively searches every path in `pluginDirs`.
 
 Duplicate physical paths are removed after resolving their real paths.
 
@@ -1212,7 +1270,7 @@ Required instructions added to the model conversation when the skill command is 
 
 Optional slash command.
 
-When omitted, Sky Code uses:
+When omitted, SkyCode uses:
 
 ```text
 /<skill-name>
@@ -1226,6 +1284,7 @@ These built-in commands are reserved:
 /model
 /permissions
 /compact
+/diagnose
 /tasks
 /catalog
 /history
@@ -1241,7 +1300,7 @@ Example:
 /review ~/project/example.ts
 ```
 
-Sky Code combines the plugin instructions with the text after the command.
+SkyCode combines the plugin instructions with the text after the command.
 
 ### `agents`
 
@@ -1274,7 +1333,7 @@ Required instructions for the delegated worker.
 
 Optional model override.
 
-When omitted, the sub-agent uses the active Sky Code model.
+When omitted, the sub-agent uses the active SkyCode model.
 
 Sub-agents run in separate Node.js child processes and communicate with the main process using Node.js IPC messages.
 
@@ -1322,7 +1381,7 @@ A path that resolves outside the plugin directory is rejected.
 
 Optional exported function name.
 
-When omitted, Sky Code loads the module's default export.
+When omitted, SkyCode loads the module's default export.
 
 Example manifest entry:
 
@@ -1353,7 +1412,7 @@ Required array using the same stdio, SSE, and Streamable HTTP schema as `config.
 Plugin MCP server names must not conflict with:
 
 - Another plugin MCP server
-- A server in Sky Code configuration
+- A server in SkyCode configuration
 
 ## Hook Lifecycle
 
@@ -1454,13 +1513,13 @@ Display a session:
 cat ~/.sky-code/sessions/SESSION_FILENAME.jsonl
 ```
 
-Search the current session from inside Sky Code:
+Search the current session from inside SkyCode:
 
 ```text
 /history search <term>
 ```
 
-If Sky Code finds a previous session for the directory where it starts, it offers to reconstruct and resume that conversation or begin a fresh one.
+If SkyCode finds a previous session for the directory where it starts, it offers to reconstruct and resume that conversation or begin a fresh one.
 
 Session logs may contain prompts, model responses, file contents, command output, MCP output, summaries, background-task progress, and errors. Treat them as private data.
 
@@ -1476,8 +1535,8 @@ npm test
 The verified test result is:
 
 ```text
-Test Files  50 passed
-Tests       296 passed
+Test Files  51 passed
+Tests       311 passed
 ```
 
 The suite includes:
@@ -1494,6 +1553,7 @@ The suite includes:
 - Session-resume tests
 - Startup-health tests
 - Setup-wizard tests
+- Diagnostics tests
 - Error-reporting tests
 - Sub-agent worker tests
 - Integration tests
@@ -1528,6 +1588,12 @@ Run the setup wizard:
 sky setup
 ```
 
+Run setup diagnostics:
+
+```bash
+sky diagnose
+```
+
 Run tests once:
 
 ```bash
@@ -1553,6 +1619,7 @@ npm run dev
 ├── src/
 │   ├── index.ts
 │   ├── setup.ts
+│   ├── diagnose.ts
 │   ├── chat.ts
 │   ├── config.ts
 │   ├── fileops.ts
@@ -1590,6 +1657,7 @@ npm run dev
 │   ├── basic.test.ts
 │   ├── integration.test.ts
 │   ├── setup.test.ts
+│   ├── diagnose.test.ts
 │   └── additional test files
 ├── .env.example
 ├── .gitignore
@@ -1633,7 +1701,7 @@ Plugins execute local JavaScript hook modules and may introduce MCP servers and 
 
 Only install plugins you trust.
 
-Review the following before starting Sky Code:
+Review the following before starting SkyCode:
 
 - `plugin.json`
 - Hook modules
@@ -1645,7 +1713,7 @@ Review the following before starting Sky Code:
 
 Shell commands run with the permissions of the current Linux user.
 
-Avoid running Sky Code as `root`.
+Avoid running SkyCode as `root`.
 
 Read every command before approving it.
 
@@ -1667,12 +1735,22 @@ Additional controls can include:
 
 ## Troubleshooting
 
-### Sky Code Is Not Configured Yet
+### Run Diagnostics First
+
+Before working through individual troubleshooting steps, run:
+
+```bash
+sky diagnose
+```
+
+This checks all ten common configuration and connectivity conditions and tells you exactly which ones are failing. If `sky` is not starting, use `sky diagnose` from any directory — it does not require SkyCode to be configured.
+
+### SkyCode Is Not Configured Yet
 
 If you see:
 
 ```text
-Sky Code is not configured yet.
+SkyCode is not configured yet.
 Run 'sky setup' to get started.
 ```
 
@@ -1682,7 +1760,7 @@ Run the setup wizard:
 sky setup
 ```
 
-### Sky Code Reads Configuration from the Wrong Home Directory
+### SkyCode Reads Configuration from the Wrong Home Directory
 
 Confirm the active user and home directory:
 
@@ -1693,14 +1771,14 @@ printf 'HOME=%s\n' "$HOME"
 pwd
 ```
 
-Sky Code should run under the non-root Linux account that owns the installation. For example:
+SkyCode should run under the non-root Linux account that owns the installation. For example:
 
 ```text
 USER=your-username
 HOME=/home/your-username
 ```
 
-Do not run Sky Code from a root login shell.
+Do not run SkyCode from a root login shell.
 
 ### `.env` Is Not Loaded
 
@@ -1774,6 +1852,7 @@ Plugins cannot use:
 /model
 /permissions
 /compact
+/diagnose
 /tasks
 /catalog
 /history
@@ -1803,7 +1882,7 @@ This can happen when:
 - There are not enough older turns for the `summarise` strategy
 - The active history does not exceed `compactionWindowSize` when using `sliding-window`
 
-This is normal. Sky Code leaves the active conversation unchanged.
+This is normal. SkyCode leaves the active conversation unchanged.
 
 Review the active global configuration:
 
@@ -1811,7 +1890,7 @@ Review the active global configuration:
 cat ~/.sky-code/config.json
 ```
 
-Also check for a project-specific configuration in the directory where Sky Code was started:
+Also check for a project-specific configuration in the directory where SkyCode was started:
 
 ```bash
 cat .sky-code/config.json
