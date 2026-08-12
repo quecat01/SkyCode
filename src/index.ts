@@ -967,6 +967,33 @@ async function loadMcpTools(
  */
 export async function runCli():
   Promise<void> {
+  // `sky diagnose` must work even when normal SkyCode configuration cannot
+  // be loaded, so route it before setup and all normal startup processing.
+  if (
+    process.argv[2] ===
+    "diagnose"
+  ) {
+    const {
+      runDiagnostics,
+      formatDiagnostics,
+    } = await import(
+      "./diagnose.js"
+    );
+
+    const results =
+      await runDiagnostics();
+
+    console.log(
+      formatDiagnostics(
+        results,
+        process.stdout.isTTY ??
+          false,
+      ),
+    );
+
+    process.exit(0);
+  }
+
   // `sky setup` is a standalone command and does not initialize the normal
   // interactive runtime or any MCP/plugin/session resources.
   if (
@@ -1642,6 +1669,10 @@ export async function runCli():
   );
 
   console.log(
+    "Type /diagnose to run setup diagnostics.",
+  );
+
+  console.log(
     "Type /tasks to view background tasks or /tasks cancel <task-id> to cancel one.",
   );
 
@@ -1685,6 +1716,31 @@ export async function runCli():
 
       // Built-in local commands are processed before catalog/plugin/model
       // conversation routing.
+      if (
+        userInput ===
+          "/diagnose"
+      ) {
+        const {
+          runDiagnostics,
+          formatDiagnostics,
+        } = await import(
+          "./diagnose.js"
+        );
+
+        const results =
+          await runDiagnostics();
+
+        console.log(
+          formatDiagnostics(
+            results,
+            process.stdout.isTTY ??
+              false,
+          ),
+        );
+
+        continue;
+      }
+
       if (
         userInput === "/model"
       ) {

@@ -969,6 +969,7 @@ const RESERVED_SKILL_COMMANDS =
     "/model",
     "/permissions",
     "/compact",
+    "/diagnose",
   ]);
 
 /**
