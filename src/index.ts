@@ -197,12 +197,61 @@ const SKYCODE_BANNER = process.stdout.isTTY
 const MAX_TOOL_ROUNDS = 20;
 
 /**
+ * Prefix of the error thrown by parseSkyToolBlockJson() when a model's
+ * sky-tool block cannot be parsed as JSON. Matched here so the CLI can offer
+ * guidance specific to a malformed live model response, rather than falling
+ * through to formatCliErrorReport's generic "referenced JSON or configuration
+ * file" guidance, which is accurate for on-disk files like plugin.json but
+ * misleading here since there is no file for the person to go edit.
+ */
+const SKY_TOOL_INVALID_JSON_PREFIX =
+  "The sky-tool block contains invalid JSON:";
+
+/**
+ * Chooses accurate recovery guidance for a failed model request, overriding
+ * the generic inferred guidance when the failure is a malformed sky-tool
+ * block rather than an on-disk configuration problem.
+ *
+ * @param {unknown} error - Failure thrown while completing a conversation turn.
+ * @returns {string | undefined} Explicit next-step guidance, or undefined to
+ * let formatCliErrorReport fall back to its generic inference.
+ *
+ * Side effects: none.
+ */
+function nextStepForModelRequestError(
+  error:
+    unknown,
+): string | undefined {
+  const message =
+    error instanceof
+      Error
+      ? error.message
+      : String(
+          error,
+        );
+
+  if (
+    message.startsWith(
+      SKY_TOOL_INVALID_JSON_PREFIX,
+    )
+  ) {
+    return "This is a malformed tool call from the model, not a file to edit. Try asking again, or switch models with /model.";
+  }
+
+  return undefined;
+}
+
+/**
  * Formats an unknown failure as Sky Code's standard CLI error report and
  * writes every resulting line to stderr.
  *
  * @param {unknown} error - Error or other thrown value to report.
  * @param {string} operation - Human-readable name of the operation that
  * failed, included as context in the formatted report.
+ * @param {string} [nextStep] - Optional explicit recovery guidance that
+ * overrides the generic inferred guidance in formatCliErrorReport. Callers
+ * that can identify a more specific, accurate cause than the generic
+ * message-pattern classifier should supply this.
  * @returns {void} This function does not return a value.
  *
  * Side effect: writes one or more error-report lines to stderr.
@@ -213,6 +262,9 @@ function printCliError(
 
   operation:
     string,
+
+  nextStep?:
+    string,
 ): void {
   for (
     const line of
@@ -220,6 +272,8 @@ function printCliError(
       error,
       {
         operation,
+
+        nextStep,
       },
     )
   ) {
@@ -2098,6 +2152,9 @@ export async function runCli():
         printCliError(
           error,
           "Model request",
+          nextStepForModelRequestError(
+            error,
+          ),
         );
 
         console.log(

@@ -66,6 +66,9 @@ describe(
             "        printCliError(",
             "          error,",
             '          "Model request",',
+            "          nextStepForModelRequestError(",
+            "            error,",
+            "          ),",
             "        );",
           ].join(
             "\n",
@@ -76,6 +79,26 @@ describe(
           source,
         ).not.toContain(
           "`Request failed: ${formatError(error)}`",
+        );
+      },
+    );
+
+    it(
+      "gives accurate guidance for a malformed sky-tool block instead of the generic file-oriented message",
+      async () => {
+        const source =
+          await readIndexSource();
+
+        expect(
+          source,
+        ).toContain(
+          "function nextStepForModelRequestError(",
+        );
+
+        expect(
+          source,
+        ).toContain(
+          "This is a malformed tool call from the model, not a file to edit. Try asking again, or switch models with /model.",
         );
       },
     );
