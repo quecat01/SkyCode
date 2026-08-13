@@ -1,5 +1,12 @@
 # SkyCode
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/skycode-wordmark-dark.svg">
+    <img alt="SkyCode" src="docs/logo/skycode-wordmark-light.svg" width="480">
+  </picture>
+</p>
+
 SkyCode is an interactive command-line AI coding assistant for Linux, designed for developers who want AI-assisted coding directly in the terminal.
 
 SkyCode requires Node.js 20 or newer and works with LiteLLM or any OpenAI-compatible API endpoint, including self-hosted LiteLLM, Ollama, OpenAI directly, and OpenRouter.

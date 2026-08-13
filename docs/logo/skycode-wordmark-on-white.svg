@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 150" role="img">
+  <title>SkyCode</title>
+  <desc>SkyCode wordmark on solid white background</desc>
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@800&amp;display=swap');
+      text { font-family: 'Poppins', 'Arial Black', Arial, sans-serif; font-weight: 800; }
+    </style>
+  </defs>
+  <rect width="620" height="150" fill="#ffffff"/>
+  <path d="M 72 18 A 57 57 0 0 1 72 138" fill="none" stroke="#CC00CC" stroke-width="7" stroke-linecap="round" opacity="0.38"/>
+  <path d="M 72 38 A 37 37 0 0 1 72 112" fill="none" stroke="#CC00CC" stroke-width="8" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 72 56 A 19 19 0 0 1 72 94"  fill="none" stroke="#CC00CC" stroke-width="9.5" stroke-linecap="round"/>
+  <text font-size="100" y="122">
+    <tspan x="138" fill="#555555">Sky</tspan><tspan fill="#CC00CC">Code</tspan>
+  </text>
+</svg>
