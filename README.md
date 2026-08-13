@@ -53,7 +53,7 @@ SkyCode requires:
 - LiteLLM or another OpenAI-compatible API endpoint
 - An API key when required by the configured endpoint
 
-SkyCode has been tested on DietPi, a Debian-based Linux distribution.
+SkyCode has been tested on Debian-based Linux distributions.
 
 ## Install Prerequisites on Linux
 
@@ -65,16 +65,6 @@ sudo apt install -y build-essential git curl
 ```
 
 Install Node.js 20 or newer using a supported method for your Linux distribution.
-
-### Optional DietPi Note
-
-On DietPi, Node.js can also be installed through DietPi Software:
-
-```bash
-sudo dietpi-software
-```
-
-Use its search function to find and install Node.js.
 
 ### Alternative Node.js Installation with NVM
 
