@@ -98,6 +98,30 @@ command -v node
 
 ## Install SkyCode
 
+### Quick Install (Recommended)
+
+`install.sh` automates the steps below: it checks for prerequisites, installs Node.js 20+ via NVM if needed (NodeSource is never used), clones the repository, builds it, and links the global `sky` command.
+
+Run it directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quecat01/SkyCode/main/install.sh | bash
+```
+
+Or download it first to review before running:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/quecat01/SkyCode/main/install.sh
+chmod +x install.sh
+./install.sh
+```
+
+By default it installs to `~/sky-code`. Run `./install.sh --help` for options, including `--dir <path>` to choose a different location and `-y` to skip the apt-install confirmation prompt. The script is safe to re-run and will not overwrite an existing install directory that has uncommitted git changes.
+
+After it finishes, continue with `sky setup` as described below.
+
+### Manual Install
+
 Clone the repository:
 
 ```bash
