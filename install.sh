@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install-skycode.sh
+# install.sh
 #
 # Purpose: Automated installer for SkyCode on Linux.
 # Mirrors the manual steps documented in README.md:
@@ -190,10 +190,27 @@ echo "Node.js:       $(node -v)"
 echo "npm:           $(npm -v)"
 [ "$DO_LINK" -eq 1 ] && echo "Command:       sky (or sky-code)"
 echo
+
+printf "%b" "$C_WARN"
+echo "============================================================"
+echo " ACTION REQUIRED before 'sky' will work in THIS terminal"
+echo "============================================================"
+printf "%b" "$C_RESET"
+echo "This installer ran in its own process, so your current shell"
+echo "does not yet know about NVM or the new 'sky' command."
+echo
+echo "Run this ONE command now (or close and reopen your terminal):"
+echo
+echo "    source ~/.bashrc"
+echo
+echo "New terminals you open after this will work automatically."
+echo
+
 echo "Next steps:"
-echo "  1. Run the setup wizard:   sky setup"
-echo "  2. Verify everything:      sky diagnose"
-echo "  3. Start SkyCode:          sky"
+echo "  1. Reload this shell:      source ~/.bashrc"
+echo "  2. Run the setup wizard:   sky setup"
+echo "  3. Verify everything:      sky diagnose"
+echo "  4. Start SkyCode:          sky"
 echo
 echo "How to check it worked:"
 echo "  command -v sky   # should print a path"
