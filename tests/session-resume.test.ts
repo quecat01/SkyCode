@@ -18,6 +18,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import {
@@ -137,6 +138,74 @@ describe(
               "The inspection is complete.",
           },
         ]);
+      },
+    );
+
+    it(
+      "does not re-warn about a stored multi-block assistant message during resume reconstruction",
+      () => {
+        // Regression test: parseSkyToolRequest() is reused here purely to
+        // pair a stored tool_result with its preceding assistant message.
+        // Its multi-block console.warn belongs to the live turn that
+        // originally produced the message, not to every future startup that
+        // happens to find this session file on disk.
+        const warnSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        const messages =
+          reconstructSessionMessages([
+            createRecord({
+              role:
+                "assistant",
+
+              content: [
+                "```sky-tool",
+                '{"tool":"run_shell_command","args":{"command":"echo one"}}',
+                "```",
+                "```sky-tool",
+                '{"tool":"run_shell_command","args":{"command":"echo two"}}',
+                "```",
+                "```sky-tool",
+                '{"tool":"run_shell_command","args":{"command":"echo three"}}',
+                "```",
+              ].join(
+                "\n",
+              ),
+            }),
+            createRecord({
+              type:
+                "tool_result",
+
+              role:
+                "tool",
+
+              tool:
+                "run_shell_command",
+
+              success:
+                true,
+
+              content:
+                "one",
+            }),
+          ]);
+
+        expect(
+          messages,
+        ).toHaveLength(
+          2,
+        );
+
+        expect(
+          warnSpy,
+        ).not.toHaveBeenCalled();
+
+        warnSpy.mockRestore();
       },
     );
 

@@ -672,6 +672,12 @@ function parseSkyToolBlockJson(
  *
  * @param {string} responseText - Complete assistant response returned by the
  * model.
+ * @param {{ warnOnMultiple?: boolean }} [options] - warnOnMultiple (default
+ * true) controls whether the multi-block terminal warning is emitted. Callers
+ * that re-parse a stored assistant message for internal bookkeeping (for
+ * example, reconstructing tool-result pairing from a previous session's
+ * history) should pass `{ warnOnMultiple: false }` so a warning about a past,
+ * already-resolved turn is not replayed as if it were live.
  * @returns {SkyToolRequest | null} Validated leading tool request, or null when
  * the response does not contain a complete sky-tool block.
  * @throws {Error} If the leading tool block does not start the response, its
@@ -679,11 +685,17 @@ function parseSkyToolBlockJson(
  * tool-specific argument fails validation.
  *
  * Side effect: writes a warning to stderr when more than one complete fenced
- * block contains a fully valid Sky Code tool request.
+ * block contains a fully valid Sky Code tool request, unless suppressed via
+ * `options.warnOnMultiple`.
  */
 export function parseSkyToolRequest(
   responseText: string,
+  options?: { warnOnMultiple?: boolean },
 ): SkyToolRequest | null {
+  const warnOnMultiple =
+    options?.warnOnMultiple ??
+      true;
+
   const trimmedResponse =
     responseText.trim();
 
@@ -754,7 +766,7 @@ export function parseSkyToolRequest(
     }
   }
 
-  if (validBlockCount > 1) {
+  if (validBlockCount > 1 && warnOnMultiple) {
     console.warn(
       [
         `Warning: The model returned ${validBlockCount} sky-tool blocks. Only the first was used.`,

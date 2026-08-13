@@ -473,9 +473,15 @@ export function reconstructSessionMessages(
 
       // Re-parse the assistant message using the same tool protocol used by
       // the live runtime, then require the persisted tool name to match.
+      // warnOnMultiple is suppressed because this re-parse is silent
+      // bookkeeping over a past, already-resolved turn, not a live response;
+      // without this the model's original multi-block warning would be
+      // replayed on every future startup that finds this session file,
+      // including runs where the user chooses to discard it and start fresh.
       const request =
         parseSkyToolRequest(
           previousMessage.content,
+          { warnOnMultiple: false },
         );
 
       if (
