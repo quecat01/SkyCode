@@ -212,6 +212,159 @@ const THINKING_SPINNER_FRAMES = [
 const THINKING_SPINNER_INTERVAL_MS = 80;
 
 /**
+ * Shortens an absolute path under the current user's home directory to a
+ * leading `~`, matching the shorthand already used in Sky Code's setup
+ * wizard output (for example "Wrote ~/.sky-code/config.json"). Paths outside
+ * the home directory are returned unchanged.
+ *
+ * @param {string} absolutePath - Path to shorten.
+ * @returns {string} Path with a leading home-directory prefix replaced by
+ * `~`, or the original path when it is not under the home directory.
+ *
+ * Side effects: none.
+ */
+function shortenHomePath(
+  absolutePath: string,
+): string {
+  const home =
+    homedir();
+
+  return absolutePath.startsWith(
+    home,
+  )
+    ? `~${absolutePath.slice(home.length)}`
+    : absolutePath;
+}
+
+/**
+ * Renders the post-startup status lines (endpoint, model, permission mode,
+ * loaded extension counts, and so on) as an aligned, rounded-corner box.
+ *
+ * Border colour (bright magenta, matching SKYCODE_BANNER and the thinking
+ * indicator) is applied only when stdout is a TTY; the same box shape and
+ * alignment are used either way; this mirrors the isTTY-fallback convention
+ * used elsewhere in Sky Code, which strips colour but not structure for
+ * redirected output (see setup.ts's unconditional "─" divider for the same
+ * pattern applied to box-drawing characters specifically).
+ *
+ * @param {ReadonlyArray<readonly [string, string]>} rows - Ordered
+ * (label, value) pairs to display, one per line, in the same order and with
+ * the same content as Sky Code's original plain "Label: value" startup log
+ * lines.
+ * @returns {string} Complete multi-line box text, ready to print. On a TTY,
+ * the box is capped to the terminal's column width (falling back to 80 when
+ * unavailable) and any line too long to fit is truncated with a trailing
+ * "…"; non-TTY output always uses the natural, untruncated width, since
+ * redirected output has no real screen to wrap around.
+ *
+ * Side effects: none.
+ */
+function renderStartupInfoPanel(
+  rows: ReadonlyArray<
+    readonly [string, string]
+  >,
+): string {
+  const labelWidth =
+    Math.max(
+      ...rows.map(
+        ([label]) =>
+          label.length,
+      ),
+    );
+
+  const contentLines =
+    rows.map(
+      ([label, value]) =>
+        `${label.padEnd(labelWidth)}  ${value}`,
+    );
+
+  const naturalWidth =
+    Math.max(
+      ...contentLines.map(
+        (line) =>
+          line.length,
+      ),
+    );
+
+  // A long value - most often the session log path - can otherwise force a
+  // box wider than the terminal, which wraps mid-border and looks broken.
+  // Redirected, non-TTY output has no real screen to wrap around, so it
+  // always keeps the natural width instead.
+  const innerWidth =
+    output.isTTY
+      ? Math.min(
+          naturalWidth,
+          Math.max(
+            (output.columns ?? 80) - 4,
+            20,
+          ),
+        )
+      : naturalWidth;
+
+  const displayLines =
+    contentLines.map(
+      (line) =>
+        line.length > innerWidth
+          ? `${line.slice(0, innerWidth - 1)}…`
+          : line,
+    );
+
+  const horizontal =
+    "─".repeat(
+      innerWidth + 2,
+    );
+
+  const colorStart =
+    output.isTTY
+      ? "\x1b[95m"
+      : "";
+
+  const colorEnd =
+    output.isTTY
+      ? "\x1b[0m"
+      : "";
+
+  const top =
+    `${colorStart}╭${horizontal}╮${colorEnd}`;
+
+  const bottom =
+    `${colorStart}╰${horizontal}╯${colorEnd}`;
+
+  const middle =
+    displayLines
+      .map(
+        (line) =>
+          `${colorStart}│${colorEnd} ${line.padEnd(
+            innerWidth,
+          )} ${colorStart}│${colorEnd}`,
+      )
+      .join(
+        "\n",
+      );
+
+  return [
+    top,
+    middle,
+    bottom,
+  ].join(
+    "\n",
+  );
+}
+
+/**
+ * Interactive prompt label shown before the user's typed input.
+ *
+ * The arrow is coloured bright magenta (matching SKYCODE_BANNER and the
+ * startup info panel border) only when stdout is a TTY; the underlying text
+ * ("You " + arrow + trailing space) is identical either way so redirected
+ * output and interactive terminals show the same wording.
+ */
+const PROMPT_LABEL =
+  process.stdout.isTTY
+    ? "You \x1b[95m❯\x1b[0m "
+    : "You ❯ ";
+
+/**
  * Starts an animated "Thinking..." indicator on the current terminal line and
  * returns a function that stops it and clears the line.
  *
@@ -1471,7 +1624,7 @@ export async function runCli():
     readline;
 
   readline.setPrompt(
-    "You: ",
+    PROMPT_LABEL,
   );
 
   let resumableSession:
@@ -1749,79 +1902,118 @@ export async function runCli():
     SKYCODE_BANNER,
   );
 
-  console.log(
-    `LiteLLM: ${config.apiUrl}`,
-  );
+  console.log();
 
-  console.log(
-    `Active model: ${activeModel}`,
-  );
-
-  console.log(
-    `Permission mode: ${permissionController.getMode()}`,
-  );
-
-  console.log(
-    `Session log: ${sessionLogger.filePath}`,
-  );
-
-  console.log(
-    `Plugins: ${plugins.length}`,
-  );
-
-  console.log(
-    `Plugin skills: ${pluginSkills.length}`,
-  );
-
-  console.log(
-    `Sub-agents: ${subAgents.length}`,
-  );
+  // Rows are collected in the same order, with the same conditional
+  // inclusion logic, as the plain "Label: value" lines this panel replaced,
+  // so the information shown is unchanged - only its presentation is new.
+  const startupInfoRows: Array<
+    readonly [string, string]
+  > = [
+    [
+      "LiteLLM",
+      config.apiUrl,
+    ],
+    [
+      "Active model",
+      activeModel,
+    ],
+    [
+      "Permission mode",
+      permissionController.getMode(),
+    ],
+    [
+      "Session log",
+      shortenHomePath(
+        sessionLogger.filePath,
+      ),
+    ],
+    [
+      "Plugins",
+      String(
+        plugins.length,
+      ),
+    ],
+    [
+      "Plugin skills",
+      String(
+        pluginSkills.length,
+      ),
+    ],
+    [
+      "Sub-agents",
+      String(
+        subAgents.length,
+      ),
+    ],
+  ];
 
   if (
     subAgents.length > 0
   ) {
-    console.log(
-      `Sub-agent names: ${subAgents
+    startupInfoRows.push([
+      "Sub-agent names",
+      subAgents
         .map(
           (
             agent,
           ) =>
             agent.name,
         )
-        .join(", ")}`,
-    );
+        .join(", "),
+    ]);
   }
 
   if (
     pluginSkills.length > 0
   ) {
-    console.log(
-      `Plugin commands: ${pluginSkills
+    startupInfoRows.push([
+      "Plugin commands",
+      pluginSkills
         .map(
           (
             skill,
           ) =>
             skill.command,
         )
-        .join(", ")}`,
-    );
+        .join(", "),
+    ]);
   }
 
-  console.log(
-    `Hooks: ${hookRegistry.count()}`,
+  startupInfoRows.push(
+    [
+      "Hooks",
+      String(
+        hookRegistry.count(),
+      ),
+    ],
+    [
+      "Plugin hooks",
+      String(
+        loadedPluginHooks.length,
+      ),
+    ],
+    [
+      "MCP servers",
+      String(
+        mcpConnections.length,
+      ),
+    ],
+    [
+      "MCP tools",
+      String(
+        mcpTools.length,
+      ),
+    ],
   );
 
   console.log(
-    `Plugin hooks: ${loadedPluginHooks.length}`,
+    renderStartupInfoPanel(
+      startupInfoRows,
+    ),
   );
 
-  console.log(
-    `MCP servers: ${mcpConnections.length}`,
-  );
-
-  console.log(
-    `MCP tools: ${mcpTools.length}`,
-  );
+  console.log();
 
   console.log(
     "Type /model to select another model.",
@@ -1863,7 +2055,7 @@ export async function runCli():
 
         userInput = (
           await readline.question(
-            "You: ",
+            PROMPT_LABEL,
           )
         ).trim();
       } catch {

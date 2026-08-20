@@ -101,7 +101,7 @@ function normalizeCurrentInput(
  * When a prompt is visible, TTY output first clears its current line; non-TTY
  * output inserts a newline instead. After task lines are written, a supplied
  * redrawPrompt callback is preferred. Without one, the reporter reconstructs
- * the prompt from promptText (default `You: `) and getCurrentInput().
+ * the prompt from promptText (default `You ❯ `) and getCurrentInput().
  *
  * @param {BackgroundTerminalReporterOptions} options - Terminal output and state
  * callbacks used by the reporter.
@@ -118,7 +118,7 @@ export function createBackgroundTerminalReporter(
 ): BackgroundTerminalReporter {
   const promptText =
     options.promptText ??
-    "You: ";
+    "You ❯ ";
 
   const pendingLines:
     string[] = [];

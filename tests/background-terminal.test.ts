@@ -140,7 +140,7 @@ describe(
         ).toBe(
           "\r\u001b[2K" +
           "[Task task-test] Progress: Working.\n" +
-          "You: partially typed",
+          "You ❯ partially typed",
         );
       },
     );
@@ -288,7 +288,7 @@ describe(
             "\r\u001b[2K" +
             "[Task task-test] Started: Test task\n" +
             "[Task task-test] Progress: Working.\n" +
-            "You: draft",
+            "You ❯ draft",
           );
         },
       );
