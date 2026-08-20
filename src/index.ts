@@ -191,6 +191,97 @@ const SKYCODE_BANNER = process.stdout.isTTY
   ? '\x1b[95m  ~ ~ ~\x1b[0m\n\x1b[95m ~ ~ ~ ~\x1b[0m\n\x1b[97mSky\x1b[0m\x1b[95mCode\x1b[0m'
   : '  ~ ~ ~\n ~ ~ ~ ~\nSkyCode';
 
+/**
+ * Braille frames cycled to animate the "thinking" indicator shown while
+ * waiting for a model response to begin streaming. One full cycle through
+ * all ten frames takes roughly 800ms at THINKING_SPINNER_INTERVAL_MS.
+ */
+const THINKING_SPINNER_FRAMES = [
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧",
+  "⠇",
+  "⠏",
+];
+
+const THINKING_SPINNER_INTERVAL_MS = 80;
+
+/**
+ * Starts an animated "Thinking..." indicator on the current terminal line and
+ * returns a function that stops it and clears the line.
+ *
+ * The indicator is a no-op when stdout is not a TTY (piped or redirected
+ * output), matching the isTTY-fallback convention used for SKYCODE_BANNER, so
+ * redirected output never receives raw carriage-return/ANSI spinner frames
+ * that would only make sense on an interactive terminal.
+ *
+ * @returns {() => void} Stop function. Safe to call more than once; only the
+ * first call has any effect. Callers should invoke it as soon as the model's
+ * response begins arriving, and unconditionally afterward (for example in a
+ * finally block) so an empty response or a thrown request error cannot leave
+ * the animation running indefinitely.
+ *
+ * Side effects: while active, writes colour and cursor-control ANSI escape
+ * sequences to stdout on a recurring timer. The returned stop function clears
+ * that timer and erases the indicator's terminal line.
+ */
+function startThinkingIndicator(): () => void {
+  if (
+    !output.isTTY
+  ) {
+    return () => {};
+  }
+
+  let frameIndex =
+    0;
+
+  let stopped =
+    false;
+
+  const interval =
+    setInterval(
+      () => {
+        output.write(
+          `\r\x1b[95m${
+            THINKING_SPINNER_FRAMES[frameIndex]
+          } Thinking...\x1b[0m`,
+        );
+
+        frameIndex =
+          (frameIndex + 1) %
+          THINKING_SPINNER_FRAMES.length;
+      },
+      THINKING_SPINNER_INTERVAL_MS,
+    );
+
+  return () => {
+    if (
+      stopped
+    ) {
+      return;
+    }
+
+    stopped =
+      true;
+
+    clearInterval(
+      interval,
+    );
+
+    // \x1b[2K clears the entire current line so the model's real output (or
+    // the next prompt) starts from a clean line rather than appending after
+    // leftover spinner characters; \r then returns the cursor to column 0.
+    output.write(
+      "\r\x1b[2K",
+    );
+  };
+}
+
 // Limit a single conversational turn to twenty consecutive model-request/tool
 // cycles. This prevents a malformed or looping model response from invoking
 // tools indefinitely without returning control to the user.
@@ -351,7 +442,10 @@ function createToolResultMessage(
  * @throws {Error} If the underlying model request or stream processing fails.
  *
  * Side effects: performs a model API request and may stream response text to
- * stdout as chunks arrive.
+ * stdout as chunks arrive. Displays an animated "Thinking..." indicator (see
+ * startThinkingIndicator()) from just before the request starts until the
+ * first response chunk arrives, an empty response resolves, or the request
+ * throws.
  */
 async function streamModelTurn(
   config: AppConfig,
@@ -372,68 +466,87 @@ async function streamModelTurn(
 
   let displayedText = false;
 
-  const response =
-    await streamChatCompletion(
-      config,
-      activeModel,
-      messages,
-      (content) => {
-        // Always preserve the entire response for logging, conversation
-        // history, and later sky-tool parsing.
-        responseText += content;
+  const stopThinkingIndicator =
+    startThinkingIndicator();
 
-        if (
-          displayMode ===
-          "normal"
-        ) {
+  let response:
+    string;
+
+  try {
+    response =
+      await streamChatCompletion(
+        config,
+        activeModel,
+        messages,
+        (content) => {
+          // The first chunk of any kind means the model has begun
+          // responding, so the "thinking" wait is over regardless of
+          // whether this turn ends up being displayed text or a hidden
+          // sky-tool block.
+          stopThinkingIndicator();
+
+          // Always preserve the entire response for logging, conversation
+          // history, and later sky-tool parsing.
+          responseText += content;
+
+          if (
+            displayMode ===
+            "normal"
+          ) {
+            output.write(
+              content,
+            );
+
+            displayedText = true;
+            return;
+          }
+
+          // Until the response type is known, keep chunks out of the terminal.
+          pendingText += content;
+
+          const trimmedStart =
+            pendingText.trimStart();
+
+          // If the text received so far is still only a prefix of the marker,
+          // wait for another chunk before deciding whether to display it.
+          if (
+            "```sky-tool".startsWith(
+              trimmedStart,
+            )
+          ) {
+            return;
+          }
+
+          // A completed marker identifies an internal tool request. Its textual
+          // representation should not be printed as ordinary assistant prose.
+          if (
+            trimmedStart.startsWith(
+              "```sky-tool",
+            )
+          ) {
+            displayMode = "tool";
+            return;
+          }
+
+          // The accumulated prefix cannot be a tool marker, so all buffered text
+          // belongs to the normal assistant response and can now be emitted.
+          displayMode = "normal";
+
           output.write(
-            content,
+            pendingText,
           );
 
           displayedText = true;
-          return;
-        }
-
-        // Until the response type is known, keep chunks out of the terminal.
-        pendingText += content;
-
-        const trimmedStart =
-          pendingText.trimStart();
-
-        // If the text received so far is still only a prefix of the marker,
-        // wait for another chunk before deciding whether to display it.
-        if (
-          "```sky-tool".startsWith(
-            trimmedStart,
-          )
-        ) {
-          return;
-        }
-
-        // A completed marker identifies an internal tool request. Its textual
-        // representation should not be printed as ordinary assistant prose.
-        if (
-          trimmedStart.startsWith(
-            "```sky-tool",
-          )
-        ) {
-          displayMode = "tool";
-          return;
-        }
-
-        // The accumulated prefix cannot be a tool marker, so all buffered text
-        // belongs to the normal assistant response and can now be emitted.
-        displayMode = "normal";
-
-        output.write(
-          pendingText,
-        );
-
-        displayedText = true;
-        pendingText = "";
-      },
-      systemPrompt,
-    );
+          pendingText = "";
+        },
+        systemPrompt,
+      );
+  } finally {
+    // Guards against a completely empty response (the callback above never
+    // ran) and against the request throwing before any content arrived;
+    // stopThinkingIndicator() is itself safe to call more than once.
+    stopThinkingIndicator();
+  }
 
   // A short response may end before streaming supplied enough characters to
   // make the normal/tool decision inside the chunk callback.
