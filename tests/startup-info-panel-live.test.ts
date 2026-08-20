@@ -243,5 +243,60 @@ describe(
         );
       },
     );
+
+    it(
+      "colours the SkyCode: response label to match the banner, so the assistant's turn is as visually distinct as the user's prompt",
+      async () => {
+        const source =
+          await readIndexSource();
+
+        expect(
+          source,
+        ).toContain(
+          [
+            "const RESPONSE_LABEL =",
+            "  process.stdout.isTTY",
+            "    ? \"\\x1b[97mSky\\x1b[0m\\x1b[95mCode\\x1b[0m: \"",
+            "    : \"SkyCode: \";",
+          ].join(
+            "\n",
+          ),
+        );
+
+        expect(
+          source,
+        ).toContain(
+          "output.write(\n        RESPONSE_LABEL,\n      );",
+        );
+
+        expect(
+          source,
+        ).not.toContain(
+          "output.write(\n        \"SkyCode: \",\n      );",
+        );
+      },
+    );
+
+    it(
+      "prints a blank line before the response label so it is not visually adjacent to the user's echoed input",
+      async () => {
+        const source =
+          await readIndexSource();
+
+        expect(
+          source,
+        ).toContain(
+          [
+            "      console.log();",
+            "",
+            "      output.write(",
+            "        RESPONSE_LABEL,",
+            "      );",
+          ].join(
+            "\n",
+          ),
+        );
+      },
+    );
   },
 );

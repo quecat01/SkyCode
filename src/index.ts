@@ -365,6 +365,23 @@ const PROMPT_LABEL =
     : "You ❯ ";
 
 /**
+ * Label written immediately before each assistant response begins streaming.
+ *
+ * Uses the exact same colour treatment as SKYCODE_BANNER ("Sky" in white,
+ * "Code" in bright magenta) so a user's turn (magenta PROMPT_LABEL arrow) and
+ * the assistant's turn (this label) are both visually anchored and easy to
+ * tell apart when scanning back through terminal scrollback, rather than
+ * both appearing as plain, undifferentiated text. Colour is applied only
+ * when stdout is a TTY; the underlying text ("SkyCode: ") is identical
+ * either way so redirected output and interactive terminals show the same
+ * wording.
+ */
+const RESPONSE_LABEL =
+  process.stdout.isTTY
+    ? "\x1b[97mSky\x1b[0m\x1b[95mCode\x1b[0m: "
+    : "SkyCode: ";
+
+/**
  * Starts an animated "Thinking..." indicator on the current terminal line and
  * returns a function that stops it and clears the line.
  *
@@ -2434,8 +2451,14 @@ export async function runCli():
       assistantOutputActive =
         true;
 
+      // A blank line always separates the user's echoed input from the
+      // assistant's turn, so RESPONSE_LABEL reliably marks where each
+      // response begins even when automatic compaction did not already
+      // print one above.
+      console.log();
+
       output.write(
-        "SkyCode: ",
+        RESPONSE_LABEL,
       );
 
       try {
