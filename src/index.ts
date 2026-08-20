@@ -382,6 +382,34 @@ const RESPONSE_LABEL =
     : "SkyCode: ";
 
 /**
+ * Builds a full-width horizontal divider printed directly above and below the
+ * interactive prompt, so the user's typed input is unmistakably bounded and
+ * separate from the assistant's response - a stronger visual boundary than
+ * PROMPT_LABEL and RESPONSE_LABEL's colour alone.
+ *
+ * Coloured bright magenta (matching PROMPT_LABEL, RESPONSE_LABEL, and the
+ * startup info panel border) only on a TTY; width matches the terminal's
+ * current column count (falling back to 80 when unavailable) either way, so
+ * the rule spans the same width a person would expect a horizontal line to
+ * span in their own terminal.
+ *
+ * @returns {string} A single "─" line spanning the terminal width, optionally
+ * wrapped in ANSI colour codes.
+ *
+ * Side effects: none.
+ */
+function renderPromptDivider(): string {
+  const line =
+    "─".repeat(
+      output.columns ?? 80,
+    );
+
+  return output.isTTY
+    ? `\x1b[95m${line}\x1b[0m`
+    : line;
+}
+
+/**
  * Starts an animated "Thinking..." indicator on the current terminal line and
  * returns a function that stops it and clears the line.
  *
@@ -2064,6 +2092,10 @@ export async function runCli():
     while (true) {
       let userInput: string;
 
+      console.log(
+        renderPromptDivider(),
+      );
+
       try {
         // Background terminal reporting uses promptActive to know whether a
         // notification must preserve and redraw the user's current input line.
@@ -2089,6 +2121,15 @@ export async function runCli():
       ) {
         continue;
       }
+
+      // Closes the divider opened above, so every non-empty submission - a
+      // command or a conversational message alike - is bounded top and
+      // bottom before anything else is printed for it. An empty submission
+      // has nothing to bound, so it skips straight back to the loop's next
+      // divider instead of printing a redundant pair here.
+      console.log(
+        renderPromptDivider(),
+      );
 
       // Built-in local commands are processed before catalog/plugin/model
       // conversation routing.

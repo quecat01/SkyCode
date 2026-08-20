@@ -298,5 +298,117 @@ describe(
         );
       },
     );
+
+    it(
+      "renders a full-width divider that spans the terminal's column count, matching the panel border colour only on a TTY",
+      async () => {
+        const source =
+          await readIndexSource();
+
+        expect(
+          source,
+        ).toContain(
+          "function renderPromptDivider(): string {",
+        );
+
+        expect(
+          source,
+        ).toContain(
+          "\"─\".repeat(\n      output.columns ?? 80,\n    );",
+        );
+
+        expect(
+          source,
+        ).toContain(
+          [
+            "  return output.isTTY",
+            "    ? `\\x1b[95m${line}\\x1b[0m`",
+            "    : line;",
+          ].join(
+            "\n",
+          ),
+        );
+      },
+    );
+
+    it(
+      "prints the divider directly above every prompt and directly below any non-empty submission, before command or conversation routing",
+      async () => {
+        const source =
+          await readIndexSource();
+
+        const loopStart =
+          source.indexOf(
+            "while (true) {",
+          );
+
+        const emptyCheckEnd =
+          source.indexOf(
+            "if (\n        userInput === \"\"\n      ) {\n        continue;\n      }",
+          );
+
+        const diagnoseCheck =
+          source.indexOf(
+            "userInput ===\n          \"/diagnose\"",
+          );
+
+        expect(
+          loopStart,
+        ).toBeGreaterThan(
+          -1,
+        );
+
+        expect(
+          emptyCheckEnd,
+        ).toBeGreaterThan(
+          loopStart,
+        );
+
+        expect(
+          diagnoseCheck,
+        ).toBeGreaterThan(
+          emptyCheckEnd,
+        );
+
+        // One divider call sits between the loop's start and the readline
+        // prompt call (above the prompt); another sits between the empty-
+        // input check and command routing (below a non-empty submission).
+        const aboveDividerPosition =
+          source.indexOf(
+            "console.log(\n        renderPromptDivider(),\n      );",
+            loopStart,
+          );
+
+        expect(
+          aboveDividerPosition,
+        ).toBeGreaterThan(
+          loopStart,
+        );
+
+        expect(
+          aboveDividerPosition,
+        ).toBeLessThan(
+          emptyCheckEnd,
+        );
+
+        const belowDividerPosition =
+          source.indexOf(
+            "console.log(\n        renderPromptDivider(),\n      );",
+            emptyCheckEnd,
+          );
+
+        expect(
+          belowDividerPosition,
+        ).toBeGreaterThan(
+          emptyCheckEnd,
+        );
+
+        expect(
+          belowDividerPosition,
+        ).toBeLessThan(
+          diagnoseCheck,
+        );
+      },
+    );
   },
 );
