@@ -396,6 +396,20 @@ Default:
 
 This setting is used only by the `sliding-window` strategy.
 
+## Operating Rules (`sky.md`)
+
+Optional global file:
+
+```text
+~/.sky-code/sky.md
+```
+
+If present, its contents are appended to the end of the generated system prompt, after all built-in instructions. Appending at the end, rather than earlier, puts it closest to generation, which helps smaller or less capable models retain it.
+
+There is no wizard step for creating `sky.md`. Write it yourself if you want Sky Code to always follow certain standing instructions, for example confirming before destructive actions or verifying tests before declaring a task done.
+
+`sky.md` is read once at startup. Changes require restarting `sky` to take effect. There is currently no project-level equivalent.
+
 ## MCP Server Configuration
 
 ### stdio MCP Server
