@@ -241,6 +241,10 @@ function formatMcpToolLines(
  * available for delegated tasks.
  * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
  * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`. Deliberately appended after everything else
+ * (rather than woven in near the top) so it sits closest to generation,
+ * which helps smaller/less-capable models retain it via recency weighting.
  * @returns {string} Complete newline-delimited system prompt sent to the model.
  */
 export function createSkyCodeSystemPrompt(
@@ -252,8 +256,10 @@ export function createSkyCodeSystemPrompt(
     readonly ActiveSubAgentDefinition[] = [],
   catalogSkills:
     readonly CatalogSkill[] = [],
+  skyMdContent:
+    string = "",
 ): string {
-  return [
+  const promptLines = [
     "You are Sky Code, an AI-powered CLI coding assistant.",
     "You help the user read, write, and edit files, run shell commands, and call connected MCP tools.",
     "",
@@ -299,7 +305,23 @@ export function createSkyCodeSystemPrompt(
     "```sky-tool",
     "{\"tool\":\"delegate_to_agent\",\"args\":{\"agent\":\"code-reviewer\",\"task\":\"Review the supplied code for correctness problems.\",\"context\":\"Focus on src/index.ts.\"}}",
     "```",
-  ].join("\n");
+  ];
+
+  const trimmedSkyMdContent =
+    skyMdContent.trim();
+
+  if (
+    trimmedSkyMdContent.length >
+    0
+  ) {
+    promptLines.push(
+      "",
+      "User-defined operating rules (~/.sky-code/sky.md):",
+      trimmedSkyMdContent,
+    );
+  }
+
+  return promptLines.join("\n");
 }
 
 /**

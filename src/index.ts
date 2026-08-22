@@ -95,6 +95,7 @@ import {
 
 import {
   loadConfig,
+  loadSkyMd,
   type AppConfig,
 } from "./config.js";
 
@@ -1619,6 +1620,12 @@ export async function runCli():
       config.defaultPermissionMode,
     );
 
+  // Optional user-authored operating rules from ~/.sky-code/sky.md. Loaded
+  // once at startup; like other global configuration, changes require a
+  // restart to take effect.
+  const skyMdContent =
+    await loadSkyMd();
+
   // The system prompt is generated from the tool/skill/agent capabilities
   // active at this moment. It is regenerated later when catalog state changes.
   let systemPrompt =
@@ -1627,6 +1634,7 @@ export async function runCli():
       pluginSkills,
       subAgents,
       activeCatalogSkills,
+      skyMdContent,
     );
 
   const handlers =
@@ -2331,6 +2339,7 @@ export async function runCli():
               pluginSkills,
               subAgents,
               activeCatalogSkills,
+              skyMdContent,
             );
 
           console.log(

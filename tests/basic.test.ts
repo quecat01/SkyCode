@@ -517,6 +517,80 @@ it(
 );
 
 
+it(
+  "appends sky.md content to the end of the system prompt when provided",
+  () => {
+    const prompt =
+      createSkyCodeSystemPrompt(
+        [],
+        [],
+        [],
+        [],
+        "Confirm before destructive actions.",
+      );
+
+    const skyMdHeaderIndex =
+      prompt.indexOf(
+        "User-defined operating rules (~/.sky-code/sky.md):",
+      );
+
+    expect(
+      skyMdHeaderIndex,
+    ).toBeGreaterThan(
+      -1,
+    );
+
+    expect(
+      prompt,
+    ).toContain(
+      "Confirm before destructive actions.",
+    );
+
+    // sky.md content must land after the delegation example, the last
+    // built-in section, so recency-weighting benefits still apply for
+    // smaller models.
+    const delegationExampleIndex =
+      prompt.indexOf(
+        "Sub-agent delegation example:",
+      );
+
+    expect(
+      skyMdHeaderIndex,
+    ).toBeGreaterThan(
+      delegationExampleIndex,
+    );
+  },
+);
+
+it(
+  "omits the sky.md section entirely when content is empty or whitespace-only",
+  () => {
+    const promptWithNoArg =
+      createSkyCodeSystemPrompt();
+
+    const promptWithBlankSkyMd =
+      createSkyCodeSystemPrompt(
+        [],
+        [],
+        [],
+        [],
+        "   \n  ",
+      );
+
+    for (const prompt of [
+      promptWithNoArg,
+      promptWithBlankSkyMd,
+    ]) {
+      expect(
+        prompt,
+      ).not.toContain(
+        "User-defined operating rules",
+      );
+    }
+  },
+);
+
+
 describe(
   "delegate_to_agent tool protocol",
   () => {

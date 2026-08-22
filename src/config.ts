@@ -1098,3 +1098,59 @@ export async function loadConfig(
       ),
   };
 }
+
+/**
+ * Loads the optional user-authored operating-rules file at
+ * `~/.sky-code/sky.md`.
+ *
+ * sky.md is entirely optional: it exists purely so a user can hand-write
+ * standing behavioral instructions (e.g. "confirm before destructive
+ * actions") that Sky Code appends to every generated system prompt. There is
+ * no wizard-driven creation path and no project-level variant today.
+ *
+ * @returns {Promise<string>} The trimmed file contents, or an empty string
+ * if the file does not exist.
+ * @throws {Error} If the file exists but cannot be read for a reason other
+ * than not existing (for example, a permissions error), so a broken
+ * installation is surfaced rather than silently ignored.
+ *
+ * Side effects: reads from the filesystem.
+ */
+export async function loadSkyMd(): Promise<string> {
+  const skyMdPath =
+    join(
+      homedir(),
+      ".sky-code",
+      "sky.md",
+    );
+
+  try {
+    const contents =
+      await readFile(
+        skyMdPath,
+        "utf8",
+      );
+
+    return contents.trim();
+  } catch (error) {
+    const nodeError =
+      error as NodeJS.ErrnoException;
+
+    // Not having a sky.md file is the default, expected case: the feature is
+    // opt-in and silently contributes nothing to the prompt when absent.
+    if (
+      nodeError.code ===
+      "ENOENT"
+    ) {
+      return "";
+    }
+
+    throw new Error(
+      `Unable to read ${skyMdPath}: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
+  }
+}
