@@ -100,6 +100,12 @@ import {
 } from "./config.js";
 
 import {
+  disableBracketedPaste,
+  enableBracketedPaste,
+  questionWithPasteSupport,
+} from "./paste-support.js";
+
+import {
   formatCliErrorReport,
 } from "./error-reporting.js";
 
@@ -1680,6 +1686,15 @@ export async function runCli():
     PROMPT_LABEL,
   );
 
+  // Lets the terminal mark pasted content with paste-start/paste-end
+  // markers, which questionWithPasteSupport() relies on to distinguish a
+  // genuine paste from fast typing. Disabled again wherever this
+  // function's readline.close() calls occur, so the terminal is not left
+  // in bracketed paste mode after Sky Code exits.
+  enableBracketedPaste(
+    output,
+  );
+
   let resumableSession:
     ResumableSession | null =
     null;
@@ -1784,6 +1799,10 @@ export async function runCli():
   } catch (error) {
     // No interactive session should continue if its required audit/session log
     // cannot be created. Clean up resources already initialized first.
+    disableBracketedPaste(
+      output,
+    );
+
     readline.close();
 
     readlineForBackground =
@@ -1933,6 +1952,10 @@ export async function runCli():
       );
 
       // Closing readline causes any pending question/main loop to terminate.
+      disableBracketedPaste(
+        output,
+      );
+
       readline.close();
     })();
   }
@@ -2110,11 +2133,12 @@ export async function runCli():
         promptActive =
           true;
 
-        userInput = (
-          await readline.question(
+        userInput =
+          await questionWithPasteSupport(
+            readline,
+            input,
             PROMPT_LABEL,
-          )
-        ).trim();
+          );
       } catch {
         // Readline rejection typically means the interface was closed, such
         // as during Ctrl+C shutdown. Leaving the loop triggers final cleanup.
@@ -2606,6 +2630,10 @@ export async function runCli():
         "MCP connection cleanup",
       );
     }
+
+    disableBracketedPaste(
+      output,
+    );
 
     readline.close();
   }

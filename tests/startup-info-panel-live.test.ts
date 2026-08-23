@@ -233,7 +233,7 @@ describe(
         expect(
           source,
         ).toContain(
-          "await readline.question(\n            PROMPT_LABEL,\n          )",
+          "await questionWithPasteSupport(\n            readline,\n            input,\n            PROMPT_LABEL,\n          )",
         );
 
         expect(
