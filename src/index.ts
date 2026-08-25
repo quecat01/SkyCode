@@ -174,10 +174,13 @@ import {
 
 import {
   createSkyCodeSystemPrompt,
+  getExampleSkyToolInvocation,
   parseSkyToolRequest,
+  SkyToolValidationError,
   type SkyToolRequest,
   type ToolExecutionResult,
   type ToolHandlers,
+  type ToolName,
 } from "./tools.js";
 
 import {
@@ -492,6 +495,14 @@ function startThinkingIndicator(): () => void {
 // tools indefinitely without returning control to the user.
 const MAX_TOOL_ROUNDS = 20;
 
+// A malformed sky-tool request (invalid JSON, missing args, prose before the
+// fenced block, and so on) is given this many additional chances to be
+// corrected before control returns to the user. Kept small and separate from
+// MAX_TOOL_ROUNDS: a model that cannot produce valid JSON after a few tries
+// is unlikely to succeed on further attempts, and this should fail fast
+// rather than consume much of the larger legitimate-tool-use budget.
+const MAX_VALIDATION_RETRIES = 2;
+
 /**
  * Prefix of the error thrown by parseSkyToolBlockJson() when a model's
  * sky-tool block cannot be parsed as JSON. Matched here so the CLI can offer
@@ -624,6 +635,62 @@ function createToolResultMessage(
     "Continue responding to the user.",
     "Use another sky-tool block if another tool is required.",
   ].join("\n");
+}
+
+/**
+ * Builds the feedback message sent back to the model after its response
+ * failed sky-tool validation (invalid JSON, missing args, prose before the
+ * fenced block, and so on).
+ *
+ * Without this, a malformed response was previously discarded entirely
+ * (removed from conversation history along with the user's message that
+ * prompted it), leaving the model with no visibility into what it did
+ * wrong. This gives it a concrete description of the failure and, when the
+ * attempted tool is known, a correct worked example for that specific tool
+ * to pattern-match against - observed directly to matter in practice: a
+ * model that repeats an identical mistake after being told only the
+ * abstract rule it broke needs something concrete to correct against, not
+ * a restatement of the rule.
+ *
+ * @param {string} validationErrorMessage - The exact validation error text
+ * (from parseSkyToolRequest's thrown Error), reused as-is so the model sees
+ * the same specific reason a person reading the terminal would.
+ * @param {ToolName | null} toolName - The tool the model was attempting to
+ * use, when validation failed after the tool name itself was already
+ * confirmed valid (see SkyToolValidationError). Null when the tool name
+ * could not be determined (invalid JSON, unrecognized tool, or prose
+ * before the fenced block), in which case no example can be shown.
+ * @returns {string} Plain-text message suitable for adding to model context.
+ */
+function createValidationErrorFeedbackMessage(
+  validationErrorMessage: string,
+  toolName: ToolName | null,
+): string {
+  const lines = [
+    `Your last response was not a valid sky-tool request: ${validationErrorMessage}`,
+    "",
+  ];
+
+  if (toolName) {
+    lines.push(
+      `Correct the sky-tool JSON and try again. Here is a valid example for ${toolName}:`,
+      "",
+      getExampleSkyToolInvocation(
+        toolName,
+      ),
+      "",
+    );
+  } else {
+    lines.push(
+      "Correct the sky-tool JSON and try again.",
+    );
+  }
+
+  lines.push(
+    "Respond with ONLY the corrected fenced sky-tool block, nothing else.",
+  );
+
+  return lines.join("\n");
 }
 
 /**
@@ -1126,6 +1193,11 @@ async function completeConversationTurn(
   hookRegistry: HookRegistry,
   systemPrompt: string,
 ): Promise<void> {
+  // Tracks consecutive sky-tool validation failures so a model that cannot
+  // produce valid JSON fails fast (see MAX_VALIDATION_RETRIES) rather than
+  // retrying indefinitely. Reset to zero on any valid response.
+  let consecutiveValidationFailures = 0;
+
   // One loop iteration represents one model response and, when requested, one
   // associated tool execution before returning the result to the model.
   for (
@@ -1156,10 +1228,82 @@ async function completeConversationTurn(
         activeModel,
     });
 
-    const toolRequest =
-      parseSkyToolRequest(
-        assistantResponse,
+    let toolRequest:
+      SkyToolRequest | null;
+
+    try {
+      toolRequest =
+        parseSkyToolRequest(
+          assistantResponse,
+        );
+    } catch (error) {
+      // Record the malformed response, same as a valid one would be, so the
+      // model can see what it actually wrote on its next attempt instead of
+      // starting from a blind cold start.
+      messages.push({
+        role: "assistant",
+        content:
+          assistantResponse,
+      });
+
+      consecutiveValidationFailures +=
+        1;
+
+      if (
+        consecutiveValidationFailures >
+        MAX_VALIDATION_RETRIES
+      ) {
+        output.write(
+          `\n(The model could not produce a valid sky-tool request after ${
+            MAX_VALIDATION_RETRIES +
+            1
+          } attempts. Last error: ${formatError(error)})\n\n`,
+        );
+
+        console.log(
+          `The active model remains ${activeModel}.`,
+        );
+
+        return;
+      }
+
+      console.log(
+        `Invalid sky-tool request (attempt ${consecutiveValidationFailures} of ${MAX_VALIDATION_RETRIES}): ${formatError(error)}`,
       );
+
+      const feedbackMessage =
+        createValidationErrorFeedbackMessage(
+          formatError(
+            error,
+          ),
+          error instanceof
+            SkyToolValidationError
+            ? error.toolName
+            : null,
+        );
+
+      messages.push({
+        role: "user",
+        content:
+          feedbackMessage,
+      });
+
+      // Mirrors how the human's own typed input is logged, since this
+      // message plays the same role in conversation history: it is what the
+      // model receives as the next "user" turn.
+      await sessionLogger.append({
+        type: "message",
+        role: "user",
+        content:
+          feedbackMessage,
+        model:
+          activeModel,
+      });
+
+      continue;
+    }
+
+    consecutiveValidationFailures = 0;
 
     messages.push({
       role: "assistant",

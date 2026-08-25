@@ -40,7 +40,10 @@ import {
 import {
   createSkyCodeSystemPrompt,
   executeSkyToolRequest,
+  getExampleSkyToolInvocation,
   parseSkyToolRequest,
+  SkyToolValidationError,
+  TOOL_NAMES,
 } from "../src/tools.ts";
 
 describe(
@@ -176,6 +179,134 @@ describe(
           ),
         ).toThrow(
           "A sky-tool request must begin the model response",
+        );
+      },
+    );
+
+    it(
+      "throws a plain Error, not SkyToolValidationError, when the tool name itself cannot be determined",
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"not_a_real_tool","args":{}}',
+          "```",
+        ].join("\n");
+
+        expect(() =>
+          parseSkyToolRequest(
+            response,
+          ),
+        ).toThrow(
+          "Unknown Sky Code tool: not_a_real_tool",
+        );
+
+        try {
+          parseSkyToolRequest(
+            response,
+          );
+        } catch (error) {
+          expect(
+            error,
+          ).not.toBeInstanceOf(
+            SkyToolValidationError,
+          );
+        }
+      },
+    );
+
+    it(
+      "throws SkyToolValidationError carrying the known tool name when args is not an object",
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"run_shell_command","args":"ls -la"}',
+          "```",
+        ].join("\n");
+
+        try {
+          parseSkyToolRequest(
+            response,
+          );
+
+          expect.fail(
+            "expected parseSkyToolRequest to throw",
+          );
+        } catch (error) {
+          expect(
+            error,
+          ).toBeInstanceOf(
+            SkyToolValidationError,
+          );
+
+          expect(
+            (
+              error as SkyToolValidationError
+            ).toolName,
+          ).toBe(
+            "run_shell_command",
+          );
+        }
+      },
+    );
+
+    it(
+      "throws SkyToolValidationError carrying the known tool name for a tool-specific argument failure",
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"delegate_to_agent","args":{"agent":"reviewer","task":"review this","context":123}}',
+          "```",
+        ].join("\n");
+
+        try {
+          parseSkyToolRequest(
+            response,
+          );
+
+          expect.fail(
+            "expected parseSkyToolRequest to throw",
+          );
+        } catch (error) {
+          expect(
+            error,
+          ).toBeInstanceOf(
+            SkyToolValidationError,
+          );
+
+          expect(
+            (
+              error as SkyToolValidationError
+            ).toolName,
+          ).toBe(
+            "delegate_to_agent",
+          );
+        }
+      },
+    );
+
+    it.each(
+      TOOL_NAMES,
+    )(
+      "getExampleSkyToolInvocation produces a request that itself parses successfully for %s",
+      (toolName) => {
+        const example =
+          getExampleSkyToolInvocation(
+            toolName,
+          );
+
+        const parsed =
+          parseSkyToolRequest(
+            example,
+          );
+
+        expect(
+          parsed,
+        ).not.toBeNull();
+
+        expect(
+          parsed?.tool,
+        ).toBe(
+          toolName,
         );
       },
     );

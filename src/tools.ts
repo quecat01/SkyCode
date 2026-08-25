@@ -177,6 +177,120 @@ export type SkyToolRequest =
     };
 
 /**
+ * Thrown by parseSkyToolBlockJson() for a validation failure that occurs
+ * after the tool name itself has already been confirmed valid (an
+ * args-shape or tool-specific argument problem, as opposed to invalid JSON
+ * or an unrecognized tool name).
+ *
+ * Callers use `toolName` to show the model a concrete, correct example for
+ * the specific tool it was trying to use, rather than only restating the
+ * abstract rule it broke. A model that already misunderstood the required
+ * shape is unlikely to fix it from an abstract restatement alone; a worked
+ * example gives it something concrete to pattern-match against.
+ */
+export class SkyToolValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly toolName: ToolName,
+  ) {
+    super(message);
+    this.name = "SkyToolValidationError";
+  }
+}
+
+/**
+ * One minimal, correct sky-tool invocation per tool, keyed by tool name.
+ *
+ * Kept in sync with the validation switch in parseSkyToolBlockJson(): every
+ * entry here must itself pass that same validation. Used to build concrete
+ * corrective examples in feedback shown to the model after a validation
+ * failure (see SkyToolValidationError).
+ */
+const EXAMPLE_SKY_TOOL_INVOCATION: Record<
+  ToolName,
+  string
+> = {
+  read_file: JSON.stringify(
+    {
+      tool: "read_file",
+      args: {
+        path: "/path/to/file",
+      },
+    },
+  ),
+  write_file: JSON.stringify(
+    {
+      tool: "write_file",
+      args: {
+        path: "/path/to/file",
+        content:
+          "file contents here",
+      },
+    },
+  ),
+  edit_file: JSON.stringify(
+    {
+      tool: "edit_file",
+      args: {
+        path: "/path/to/file",
+        old_str:
+          "text to find",
+        new_str:
+          "replacement text",
+      },
+    },
+  ),
+  run_shell_command:
+    JSON.stringify(
+      {
+        tool: "run_shell_command",
+        args: {
+          command: "ls -la",
+        },
+      },
+    ),
+  mcp_call: JSON.stringify(
+    {
+      tool: "mcp_call",
+      args: {
+        server: "my-server",
+        name: "tool-name",
+        arguments: {},
+      },
+    },
+  ),
+  delegate_to_agent:
+    JSON.stringify(
+      {
+        tool: "delegate_to_agent",
+        args: {
+          agent:
+            "agent-name",
+          task: "task description",
+        },
+      },
+    ),
+};
+
+/**
+ * Returns a minimal, correct sky-tool fenced block for the given tool.
+ *
+ * @param {ToolName} toolName - Tool to build an example invocation for.
+ * @returns {string} A complete, valid ` ```sky-tool ` fenced block.
+ */
+export function getExampleSkyToolInvocation(
+  toolName: ToolName,
+): string {
+  return [
+    "```sky-tool",
+    EXAMPLE_SKY_TOOL_INVOCATION[
+      toolName
+    ],
+    "```",
+  ].join("\n");
+}
+
+/**
  * Formats connected MCP tool definitions for inclusion in the system prompt.
  *
  * Each connected tool contributes its server name, tool name, description, and
@@ -511,6 +625,46 @@ function parseSkyToolBlockJson(
     );
   }
 
+  // From this point on, `tool` is a confirmed, valid ToolName, so any
+  // further validation failure can be reported with a concrete example for
+  // this specific tool (see SkyToolValidationError) instead of only the
+  // abstract rule that was broken.
+  try {
+    return parseSkyToolArgsForKnownTool(
+      tool,
+      args,
+    );
+  } catch (error) {
+    throw new SkyToolValidationError(
+      error instanceof Error
+        ? error.message
+        : String(error),
+      tool,
+    );
+  }
+}
+
+/**
+ * Validates and normalizes the `args` object for a tool whose name has
+ * already been confirmed valid.
+ *
+ * Split out from parseSkyToolBlockJson() so that function can wrap this
+ * specific validation step and attach the already-known tool name to any
+ * failure via SkyToolValidationError.
+ *
+ * @param {ToolName} tool - Confirmed valid tool name.
+ * @param {unknown} args - Raw `args` value from the model's JSON, not yet
+ * validated.
+ * @returns {SkyToolRequest} Fully validated Sky Code tool request.
+ * @throws {Error} If args is not an object, or a tool-specific argument
+ * fails validation.
+ *
+ * Side effects: none.
+ */
+function parseSkyToolArgsForKnownTool(
+  tool: ToolName,
+  args: unknown,
+): SkyToolRequest {
   if (!isRecord(args)) {
     throw new Error(
       'The sky-tool JSON must contain an "args" object',
