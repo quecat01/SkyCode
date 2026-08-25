@@ -33,6 +33,10 @@ import {
   join,
 } from "node:path";
 
+import {
+  DEFAULT_SKY_MD_CONTENT,
+} from "./config.js";
+
 /**
  * ANSI-coloured startup banner displayed when SkyCode launches.
  *
@@ -1008,7 +1012,9 @@ function printCancellationMessage():
  * runSetup().
  *
  * Side effects: prompts in the terminal, performs an API request, creates
- * ~/.sky-code/ when necessary, and writes ~/.sky-code/.env and config.json.
+ * ~/.sky-code/ when necessary, writes ~/.sky-code/.env and config.json, and
+ * seeds ~/.sky-code/sky.md with DEFAULT_SKY_MD_CONTENT when that file does
+ * not already exist.
  */
 async function runSetupWizard(
   setupSignal: AbortSignal,
@@ -1031,9 +1037,23 @@ async function runSetupWizard(
       ".env",
     );
 
+  const skyMdPath =
+    join(
+      setupDirectory,
+      "sky.md",
+    );
+
   const configAlreadyExists =
     await pathExists(
       configPath,
+    );
+
+  // Checked independently of configAlreadyExists: sky.md is a freely
+  // user-editable file, not tied to whether config.json exists, so a
+  // reconfigure of an existing installation must not touch it.
+  const skyMdAlreadyExists =
+    await pathExists(
+      skyMdPath,
     );
 
   // Check cancellation immediately after the initial asynchronous filesystem
@@ -1254,6 +1274,23 @@ async function runSetupWizard(
     configContents,
     0o644,
   );
+
+  // Never overwrites an existing sky.md: it is a freely user-editable
+  // file, and any customization already made must be preserved. This only
+  // seeds a fresh installation that has no sky.md yet.
+  if (
+    !skyMdAlreadyExists
+  ) {
+    await writeFileAtomically(
+      skyMdPath,
+      DEFAULT_SKY_MD_CONTENT,
+      0o644,
+    );
+
+    console.log(
+      "✓ Wrote ~/.sky-code/sky.md",
+    );
+  }
 
   console.log(
     "✓ Wrote ~/.sky-code/config.json",

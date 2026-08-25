@@ -398,7 +398,7 @@ This setting is used only by the `sliding-window` strategy.
 
 ## Operating Rules (`sky.md`)
 
-Optional global file:
+Global file:
 
 ```text
 ~/.sky-code/sky.md
@@ -406,7 +406,9 @@ Optional global file:
 
 If present, its contents are appended to the end of the generated system prompt, after all built-in instructions. Appending at the end, rather than earlier, puts it closest to generation, which helps smaller or less capable models retain it.
 
-There is no wizard step for creating `sky.md`. Write it yourself if you want Sky Code to always follow certain standing instructions, for example confirming before destructive actions or verifying tests before declaring a task done.
+`sky setup` seeds this file with a default set of operating rules on a fresh installation, if it does not already exist. `sky setup` never overwrites an existing `sky.md`, so any edits you make are always preserved; the default is only ever written once, the first time.
+
+Edit it freely to add your own standing instructions, for example confirming before destructive actions or verifying tests before declaring a task done.
 
 `sky.md` is read once at startup. Changes require restarting `sky` to take effect. There is currently no project-level equivalent.
 

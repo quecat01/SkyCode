@@ -1100,13 +1100,63 @@ export async function loadConfig(
 }
 
 /**
+ * Canonical default content written to `~/.sky-code/sky.md` by `sky setup`
+ * when that file does not already exist (see runSetupWizard() in setup.ts).
+ *
+ * This is the single source of truth for Sky Code's default operating
+ * rules. Kept here, in source, specifically so future rule changes are one
+ * code change shipped to every installation via a normal update, rather
+ * than a file that has to be manually recreated or copied between
+ * machines and can silently drift out of sync (as happened in practice
+ * before this constant existed).
+ *
+ * `sky setup` never overwrites an existing sky.md, so a user's own edits
+ * are always preserved; this default only ever applies to a fresh
+ * installation that has no sky.md yet.
+ */
+export const DEFAULT_SKY_MD_CONTENT = `# Sky Code operating rules
+
+These rules apply at all times, in every session, regardless of the active
+permission mode (including \`bypass\`).
+
+1. **Reason only from verified facts.** Never guess or invent dates,
+   numbers, names, commands, prices, or sources. If uncertain, say so
+   explicitly. If a request is unclear or missing important details, ask
+   before answering or taking action.
+
+2. **Confirm before destructive or irreversible actions.** This includes
+   deleting files, force-pushing, overwriting without a backup, and
+   dropping data. This holds even when the active permission mode would
+   otherwise auto-approve it.
+
+3. **Never fabricate command output or results.** Show real output only.
+   Do not claim a command succeeded, a test passed, or a value was
+   returned unless it was actually observed.
+
+4. **Always verify build and tests pass before declaring a task done.**
+   Run the project's build and test commands and check the actual result
+   before reporting completion.
+
+5. **Match existing code style and conventions** instead of introducing
+   new patterns. Follow what the surrounding codebase already does.
+
+6. **Prefer minimal, targeted diffs over broad refactors** unless
+   specifically asked for a larger change.
+
+7. **Never write any text before the sky-tool fenced block.** It must be
+   the very first thing in your response, with nothing before it - no
+   headings, no narration, nothing.
+`;
+
+/**
  * Loads the optional user-authored operating-rules file at
  * `~/.sky-code/sky.md`.
  *
- * sky.md is entirely optional: it exists purely so a user can hand-write
- * standing behavioral instructions (e.g. "confirm before destructive
- * actions") that Sky Code appends to every generated system prompt. There is
- * no wizard-driven creation path and no project-level variant today.
+ * `sky setup` seeds this file with DEFAULT_SKY_MD_CONTENT on a fresh
+ * installation (see runSetupWizard() in setup.ts), but it remains a
+ * regular, freely user-editable file afterward: there is no enforced
+ * relationship between the two beyond that one-time seeding, and no
+ * project-level variant today.
  *
  * @returns {Promise<string>} The trimmed file contents, or an empty string
  * if the file does not exist.

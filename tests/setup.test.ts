@@ -743,6 +743,81 @@ describe(
     );
 
     it(
+      "creates sky.md with the default operating rules when it does not already exist",
+      async () => {
+        queueSuccessfulSetupAnswers();
+
+        installSuccessfulFetchMock();
+
+        const {
+          runSetup,
+        } =
+          await import(
+            "../src/setup.ts"
+          );
+
+        const {
+          DEFAULT_SKY_MD_CONTENT,
+        } =
+          await import(
+            "../src/config.ts"
+          );
+
+        await runSetup();
+
+        expect(
+          state.files.get(
+            "/mock-home/.sky-code/sky.md",
+          ),
+        ).toBe(
+          DEFAULT_SKY_MD_CONTENT,
+        );
+
+        expect(
+          state.modes.get(
+            "/mock-home/.sky-code/sky.md",
+          ),
+        ).toBe(
+          0o644,
+        );
+      },
+    );
+
+    it(
+      "does not overwrite an existing sky.md",
+      async () => {
+        queueSuccessfulSetupAnswers();
+
+        installSuccessfulFetchMock();
+
+        const customContent =
+          "# My own custom rules\n\nDo whatever I say, always.\n";
+
+        state.files.set(
+          "/mock-home/.sky-code/sky.md",
+          customContent,
+        );
+
+        const {
+          runSetup,
+        } =
+          await import(
+            "../src/setup.ts"
+          );
+
+        await runSetup();
+
+        expect(
+          state.files.get(
+            "/mock-home/.sky-code/sky.md",
+          ),
+        ).toBe(
+          customContent,
+        );
+      },
+    );
+
+    it(
       "tests the configured /v1/models endpoint and uses the returned model list",
       async () => {
         queueSuccessfulSetupAnswers();
