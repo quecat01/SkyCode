@@ -408,6 +408,8 @@ If present, its contents are appended to the end of the generated system prompt,
 
 `sky setup` seeds this file with a default set of operating rules on a fresh installation, if it does not already exist. `sky setup` never overwrites an existing `sky.md`, so any edits you make are always preserved; the default is only ever written once, the first time.
 
+**Updating the default rules.** `DEFAULT_SKY_MD_CONTENT` in `src/config.ts` is the single source of truth for what a fresh install receives. Editing it and pushing to GitHub only affects future installations that have not yet run `sky setup` - it does not update `sky.md` on a machine that is already set up, since `sky setup` never overwrites an existing file. Bringing an existing installation's `sky.md` up to date after a change requires manually editing `~/.sky-code/sky.md` on that machine to match.
+
 Edit it freely to add your own standing instructions, for example confirming before destructive actions or verifying tests before declaring a task done.
 
 `sky.md` is read once at startup. Changes require restarting `sky` to take effect. There is currently no project-level equivalent.
