@@ -1907,6 +1907,14 @@ In plan mode, the permission-aware handler may complete successfully while repor
 
 Read the result text. No file, command, MCP call, or delegated task should execute.
 
+### Model Cannot Produce Valid Tool Requests
+
+If a response contains `(The model could not produce a valid sky-tool request after N attempts...)`, the active model repeatedly failed to format a `sky-tool` block correctly (invalid JSON, a missing `args` object, or similar).
+
+SkyCode gives the model a bounded number of chances to correct itself, sending back the specific validation error and a worked example for the tool it was attempting, before giving up. The failed attempts and feedback remain in the conversation, so the model has the same context available on the next message.
+
+This is typically a sign the active model is too small or unreliable for consistent JSON tool-calling rather than a SkyCode bug. Trying a larger or more capable model usually resolves it.
+
 ### Context Compaction Is Not Needed
 
 Manual `/compact` may report that compaction is not needed.
