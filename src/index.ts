@@ -106,6 +106,10 @@ import {
 } from "./paste-support.js";
 
 import {
+  createSkyCodeMarkdownStreamer,
+} from "./markdown-render.js";
+
+import {
   formatCliErrorReport,
 } from "./error-reporting.js";
 
@@ -738,6 +742,12 @@ async function streamModelTurn(
 
   let displayedText = false;
 
+  // One streamer per turn: it holds buffering state (an open code fence or
+  // table) that has no meaning across separate assistant responses. Never
+  // fed anything but the assistant's own conversational text further below.
+  const markdownStreamer =
+    createSkyCodeMarkdownStreamer();
+
   const stopThinkingIndicator =
     startThinkingIndicator();
 
@@ -766,7 +776,9 @@ async function streamModelTurn(
             "normal"
           ) {
             output.write(
-              content,
+              markdownStreamer.push(
+                content,
+              ),
             );
 
             displayedText = true;
@@ -805,7 +817,9 @@ async function streamModelTurn(
           displayMode = "normal";
 
           output.write(
-            pendingText,
+            markdownStreamer.push(
+              pendingText,
+            ),
           );
 
           displayedText = true;
@@ -842,12 +856,26 @@ async function streamModelTurn(
         pendingText !== ""
       ) {
         output.write(
-          pendingText,
+          markdownStreamer.push(
+            pendingText,
+          ),
         );
 
         displayedText = true;
       }
     }
+  }
+
+  // Flushes any content the streamer is still holding back for context (an
+  // open code fence or table at the very end of the response). Only
+  // meaningful when the turn's own text was actually pushed through the
+  // streamer above; a tool-block turn never fed it anything.
+  if (
+    displayMode === "normal"
+  ) {
+    output.write(
+      markdownStreamer.finish(),
+    );
   }
 
   return {
