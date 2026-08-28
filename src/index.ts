@@ -1538,6 +1538,26 @@ export async function runCli():
     process.exit(0);
   }
 
+  // `sky update` is a standalone command, like diagnose: it must work
+  // without normal SkyCode configuration loaded, and never touches
+  // ~/.sky-code/ (see the standing rule against writing to an existing
+  // sky.md without explicit user action - update.ts only ever operates on
+  // the installation directory itself).
+  if (
+    process.argv[2] ===
+    "update"
+  ) {
+    const {
+      runUpdate,
+    } = await import(
+      "./update.js"
+    );
+
+    await runUpdate();
+
+    process.exit(0);
+  }
+
   // `sky setup` is a standalone command and does not initialize the normal
   // interactive runtime or any MCP/plugin/session resources.
   if (
