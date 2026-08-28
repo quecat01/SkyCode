@@ -163,6 +163,20 @@ When setup is complete, start SkyCode with:
 sky
 ```
 
+### Updating SkyCode
+
+```bash
+sky update
+```
+
+Pulls the latest release, reinstalls dependencies, rebuilds, and runs the test suite as a safety check. Refuses to make any changes, with a clear explanation, if:
+
+- the installation directory has uncommitted changes
+- you are not currently on the `main` branch
+- your local `main` has diverged from `origin/main` (local commits that are not upstream)
+
+In any of these cases, resolve the issue manually (commit or discard your changes, switch to `main`, or merge/rebase) and run `sky update` again. Like `install.sh`, `sky update` never touches `~/.sky-code/` - your configuration, `.env`, `sky.md`, and session logs are never affected.
+
 ### Manual Configuration (Alternative to `sky setup`)
 
 If you prefer to configure SkyCode manually instead of using the wizard, create the environment file:
@@ -1631,6 +1645,12 @@ Run setup diagnostics:
 
 ```bash
 sky diagnose
+```
+
+Update an existing installation:
+
+```bash
+sky update
 ```
 
 Run tests once:
