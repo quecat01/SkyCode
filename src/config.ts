@@ -13,9 +13,15 @@
 
 import { config as loadDotEnv } from "dotenv";
 
-import { readFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -1097,6 +1103,128 @@ export async function loadConfig(
         "pluginDirs",
       ),
   };
+}
+
+/**
+ * Writes a complete file through a temporary sibling file and then renames it
+ * over the destination, so a crash or interruption mid-write cannot leave a
+ * truncated config.json behind.
+ *
+ * Mirrors the equivalent helper already used by the setup wizard
+ * (writeFileAtomically() in setup.ts) for the same file. Duplicated here
+ * rather than imported to avoid a circular dependency: setup.ts already
+ * imports from config.ts.
+ *
+ * @param {string} filePath - Final destination path.
+ * @param {string} contents - Complete UTF-8 contents to write.
+ * @returns {Promise<void>} Resolves after the destination has been replaced.
+ * @throws {Error} If writing or renaming fails.
+ *
+ * Side effects: creates and renames a temporary file, overwrites the target
+ * path, and may delete a temporary file during error recovery.
+ */
+async function writeConfigFileAtomically(
+  filePath: string,
+  contents: string,
+): Promise<void> {
+  const directory =
+    dirname(
+      filePath,
+    );
+
+  const temporaryPath =
+    join(
+      directory,
+      `.${basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
+    );
+
+  try {
+    await writeFile(
+      temporaryPath,
+      contents,
+      {
+        encoding: "utf8",
+        mode: 0o644,
+      },
+    );
+
+    await rename(
+      temporaryPath,
+      filePath,
+    );
+  } catch (error) {
+    await rm(
+      temporaryPath,
+      {
+        force: true,
+      },
+    ).catch(() => {});
+
+    throw error;
+  }
+}
+
+/**
+ * Persists a new default model to `~/.sky-code/config.json`, preserving
+ * every other stored setting.
+ *
+ * Used by the `/model` command's optional "save as default" prompt so a
+ * session-only model switch can also become the value loadConfig() reads on
+ * every future startup, without requiring the user to hand-edit JSON. Only
+ * ever writes the global config file: a project-level
+ * `.sky-code/config.json`, if one exists, still takes precedence over it per
+ * loadConfig()'s merge order and is not touched here.
+ *
+ * @param {string} model - Model identifier to store as defaultModel.
+ * @returns {Promise<void>} Resolves once the file has been written.
+ * @throws {Error} If the existing config.json cannot be read or parsed, or if
+ * the write fails (for example, due to filesystem permissions).
+ *
+ * Side effects: reads and writes `~/.sky-code/config.json`.
+ */
+export async function saveDefaultModel(
+  model: string,
+): Promise<void> {
+  const configPath =
+    join(
+      homedir(),
+      ".sky-code",
+      "config.json",
+    );
+
+  const existingConfig =
+    await readConfigFile(
+      configPath,
+    );
+
+  const updatedConfig = {
+    ...existingConfig,
+    defaultModel: model,
+  };
+
+  const contents =
+    `${JSON.stringify(
+      updatedConfig,
+      null,
+      2,
+    )}\n`;
+
+  // ~/.sky-code/ is normally created by `sky setup`, but this function must
+  // not assume that has already happened (for example, a config.json placed
+  // there by hand without ever running setup).
+  await mkdir(
+    dirname(
+      configPath,
+    ),
+    {
+      recursive: true,
+    },
+  );
+
+  await writeConfigFileAtomically(
+    configPath,
+    contents,
+  );
 }
 
 /**

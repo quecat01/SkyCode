@@ -96,6 +96,7 @@ import {
 import {
   loadConfig,
   loadSkyMd,
+  saveDefaultModel,
   type AppConfig,
 } from "./config.js";
 
@@ -188,6 +189,7 @@ import {
 } from "./tools.js";
 
 import {
+  confirmAction,
   formatError,
 } from "./utils.js";
 
@@ -893,21 +895,42 @@ async function streamModelTurn(
  * retained and the user returns to the main prompt. Pressing Enter at the
  * selection prompt also leaves the current model unchanged.
  *
+ * After a successful selection, the user is asked whether the new model
+ * should also become the persistent default (the value loadConfig() reads on
+ * every future startup), separately from the session-only switch this
+ * function always performs. Declining, or a failure while saving, does not
+ * affect the returned session model.
+ *
  * @param {AppConfig} config - Validated API configuration used to retrieve
  * available models.
  * @param {ReadlineInterface} readline - Active CLI readline interface.
  * @param {string} currentModel - Model currently selected for conversation
  * turns.
+ * @param {(message: string) => Promise<boolean>} confirmPersist - Prompts the
+ * user to approve saving the selection as the persistent default. Defaults to
+ * confirmAction; overridable for testing.
+ * @param {(model: string) => Promise<void>} saveModel - Persists the selected
+ * model as the new default. Defaults to saveDefaultModel; overridable for
+ * testing.
  * @returns {Promise<string>} Newly selected model, or currentModel when no
  * valid change is made.
  *
- * Side effects: may perform an API request and writes choices, status, or
- * validation messages to the terminal.
+ * Side effects: may perform an API request, may write to
+ * ~/.sky-code/config.json, and writes choices, status, or validation
+ * messages to the terminal.
  */
 async function selectModel(
   config: AppConfig,
   readline: ReadlineInterface,
   currentModel: string,
+  confirmPersist: (
+    message: string,
+  ) => Promise<boolean> =
+    confirmAction,
+  saveModel: (
+    model: string,
+  ) => Promise<void> =
+    saveDefaultModel,
 ): Promise<string> {
   let models: string[];
 
@@ -1012,6 +1035,49 @@ async function selectModel(
   console.log(
     `Active model: ${selectedModel}`,
   );
+
+  // confirmPersist (confirmAction/Inquirer by default) manages the terminal's
+  // raw mode itself, competing with the main readline interface exactly like
+  // tool-execution approval prompts do elsewhere in this file. Without
+  // pausing readline first and restoring its raw mode afterward, the next
+  // readline.question() call in the main loop fails and the whole session
+  // exits - this mirrors the existing pause/resume/restoreReadlineRawMode
+  // pattern used around executeSkyToolRequestWithHooks().
+  readline.pause();
+
+  let shouldPersist: boolean;
+
+  try {
+    shouldPersist =
+      await confirmPersist(
+        "Also make this the persistent default?",
+      );
+  } finally {
+    readline.resume();
+
+    restoreReadlineRawMode(
+      input,
+    );
+  }
+
+  if (shouldPersist) {
+    try {
+      await saveModel(
+        selectedModel,
+      );
+
+      console.log(
+        "✓ Saved as persistent default in ~/.sky-code/config.json",
+      );
+    } catch (error) {
+      // A failed save must not undo the session-level switch already applied
+      // above, so this session keeps running on selectedModel regardless.
+      printCliError(
+        error,
+        "Saving persistent default model",
+      );
+    }
+  }
 
   return selectedModel;
 }
