@@ -985,6 +985,63 @@ describe(
     );
 
     it(
+      "skips (not fails) the session directory check when the directory does not exist yet",
+      async () => {
+        state.sessionsExist =
+          false;
+
+        installModelFetch([
+          "model-one",
+          "model-two",
+        ]);
+
+        const {
+          formatDiagnostics,
+          runDiagnostics,
+        } =
+          await import(
+            "../src/diagnose.ts"
+          );
+
+        const results =
+          await runDiagnostics();
+
+        expect(
+          getResult(
+            results,
+            "Session directory",
+          ),
+        ).toMatchObject({
+          status:
+            "skip",
+        });
+
+        expect(
+          getResult(
+            results,
+            "Session directory",
+          ).detail,
+        ).toContain(
+          "not yet created",
+        );
+
+        /*
+         * A first-run install with no sessions directory yet must not
+         * increase the failed-check count: createSessionLogger() creates
+         * this directory lazily the first time Sky Code actually runs.
+         */
+        expect(
+          formatDiagnostics(
+            results,
+            false,
+          ),
+        ).toContain(
+          "All checks passed.",
+        );
+      },
+    );
+
+    it(
       "includes ANSI colour codes when formatting TTY output",
       async () => {
         const {

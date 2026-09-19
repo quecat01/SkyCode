@@ -1046,15 +1046,19 @@ export async function runDiagnostics():
     if (
       nodeError.code === "ENOENT"
     ) {
+      // Not finding the sessions directory here is expected on a fresh
+      // install: createSessionLogger() (src/session.ts) creates it lazily,
+      // recursively, the first time Sky Code actually starts a session.
+      // findLatestResumableSession() (src/session-resume.ts) already treats
+      // this same ENOENT as a normal "nothing to resume" first-run
+      // condition, so this check should not report it as a failure either.
       results.push({
         label:
           "Session directory",
         status:
-          "fail",
+          "skip",
         detail:
-          "~/.sky-code/sessions/  (not found)",
-        suggestion:
-          "Run SkyCode setup or create a writable ~/.sky-code/sessions/ directory",
+          "~/.sky-code/sessions/  (not yet created - created automatically on first run)",
       });
     } else {
       results.push({
