@@ -117,6 +117,10 @@ fi
 
 if [ "$node_ok" -eq 0 ]; then
   export NVM_DIR="$HOME/.nvm"
+  # Ensure NVM_DIR exists before invoking the official nvm installer: its own
+  # guard clause refuses to run if NVM_DIR is set in the environment but the
+  # directory doesn't exist yet (a common fresh-machine failure mode).
+  mkdir -p "$NVM_DIR"
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     info "Installing NVM $NVM_VERSION (NodeSource is never used per project policy)"
     curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
