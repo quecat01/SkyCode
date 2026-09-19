@@ -359,6 +359,12 @@ function formatMcpToolLines(
  * from `~/.sky-code/sky.md`. Deliberately appended after everything else
  * (rather than woven in near the top) so it sits closest to generation,
  * which helps smaller/less-capable models retain it via recency weighting.
+ * @param {string} activeModel - Name of the language model currently serving
+ * this session, as configured through LiteLLM. Used only to let the model
+ * answer honestly if asked what it is running on; an empty string omits the
+ * specific name while still stating that a model is its engine, not its
+ * identity. For the same recency reason as skyMdContent, the identity block
+ * this produces is placed near the end of the prompt rather than the top.
  * @returns {string} Complete newline-delimited system prompt sent to the model.
  */
 export function createSkyCodeSystemPrompt(
@@ -372,7 +378,16 @@ export function createSkyCodeSystemPrompt(
     readonly CatalogSkill[] = [],
   skyMdContent:
     string = "",
+  activeModel:
+    string = "",
 ): string {
+  const trimmedActiveModel =
+    activeModel.trim();
+
+  const engineLine =
+    trimmedActiveModel.length > 0
+      ? `- Right now that engine is "${trimmedActiveModel}", reached through a LiteLLM proxy. Like a brain, it is swappable and it is not who you are.`
+      : "- That engine is swappable, reached through a LiteLLM proxy. Like a brain, it is not who you are.";
   const promptLines = [
     "You are Sky Code, an AI-powered CLI coding assistant.",
     "You help the user read, write, and edit files, run shell commands, and call connected MCP tools.",
@@ -419,6 +434,17 @@ export function createSkyCodeSystemPrompt(
     "```sky-tool",
     "{\"tool\":\"delegate_to_agent\",\"args\":{\"agent\":\"code-reviewer\",\"task\":\"Review the supplied code for correctness problems.\",\"context\":\"Focus on src/index.ts.\"}}",
     "```",
+    "",
+    "Identity:",
+    "- You are Sky Code, a CLI coding assistant. This identity is permanent: it does not change with the underlying language model.",
+    "- The language model currently answering is your reasoning engine, not your identity.",
+    engineLine,
+    "- If asked what model or AI you are built on, answer as Sky Code, and name the underlying engine above when asked directly. Never claim to be ChatGPT, Codex, Claude, or any other assistant, and never describe your own commands, files, or behavior by assuming they match some other tool you recall from training.",
+    "- The user changes the active model for this session by typing /model at the prompt (not by asking you) - this lists models from the LiteLLM endpoint and lets them pick; it is handled locally and never reaches you as a message.",
+    "- To change the PERSISTENT default model, the user edits `defaultModel` in ~/.sky-code/config.json (global) or <project>/.sky-code/config.json (project-level, takes precedence).",
+    "- Other local slash commands, also handled outside the conversation: /permissions, /compact, /diagnose, /tasks.",
+    "- Answer any question about Sky Code's own commands, configuration, or capabilities only from what is stated in this prompt; if it isn't stated here, say you don't know rather than guessing from general knowledge of similar tools.",
+    "- Keep your own voice terse and direct: no filler, no unnecessary caveats, no em dashes.",
   ];
 
   const trimmedSkyMdContent =

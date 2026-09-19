@@ -42,7 +42,7 @@ describe(
     );
 
     it(
-      "loads sky.md content once and passes it to both system prompt call sites",
+      "loads sky.md content once and passes it to every system prompt call site",
       async () => {
         const source =
           await readIndexSource();
@@ -55,11 +55,13 @@ describe(
 
         // One declaration (`const skyMdContent = await loadSkyMd();`) plus
         // one usage per createSkyCodeSystemPrompt call site (initial
-        // generation and catalog-change regeneration).
+        // generation, catalog-change regeneration, and /model regeneration -
+        // the identity block names the active engine, so switching models
+        // must also regenerate the prompt).
         expect(
           skyMdContentOccurrences,
         ).toBe(
-          3,
+          4,
         );
 
         expect(

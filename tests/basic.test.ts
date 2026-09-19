@@ -721,6 +721,73 @@ it(
   },
 );
 
+it(
+  "names the active model in the identity block when one is supplied",
+  () => {
+    const prompt =
+      createSkyCodeSystemPrompt(
+        [],
+        [],
+        [],
+        [],
+        "",
+        "chatgpt-gpt-5.5",
+      );
+
+    expect(
+      prompt,
+    ).toContain(
+      "Identity:",
+    );
+
+    expect(
+      prompt,
+    ).toContain(
+      'Right now that engine is "chatgpt-gpt-5.5", reached through a LiteLLM proxy.',
+    );
+
+    expect(
+      prompt,
+    ).not.toContain(
+      "That engine is swappable, reached through a LiteLLM proxy.",
+    );
+  },
+);
+
+it(
+  "falls back to a generic engine line when no active model is supplied",
+  () => {
+    const prompt =
+      createSkyCodeSystemPrompt();
+
+    expect(
+      prompt,
+    ).toContain(
+      "That engine is swappable, reached through a LiteLLM proxy.",
+    );
+
+    expect(
+      prompt,
+    ).not.toContain(
+      'Right now that engine is "',
+    );
+  },
+);
+
+it(
+  "instructs the model never to claim to be a different assistant",
+  () => {
+    const prompt =
+      createSkyCodeSystemPrompt();
+
+    expect(
+      prompt,
+    ).toContain(
+      "Never claim to be ChatGPT, Codex, Claude, or any other assistant",
+    );
+  },
+);
+
 
 describe(
   "delegate_to_agent tool protocol",

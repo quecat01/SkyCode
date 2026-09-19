@@ -1833,6 +1833,7 @@ export async function runCli():
       subAgents,
       activeCatalogSkills,
       skyMdContent,
+      activeModel,
     );
 
   const handlers =
@@ -2392,6 +2393,20 @@ export async function runCli():
             activeModel,
           );
 
+        // The identity section of the system prompt names the active
+        // engine, so it must be regenerated whenever /model changes it -
+        // otherwise the model would keep telling the user it is running on
+        // whichever engine was active at startup.
+        systemPrompt =
+          createSkyCodeSystemPrompt(
+            mcpTools,
+            pluginSkills,
+            subAgents,
+            activeCatalogSkills,
+            skyMdContent,
+            activeModel,
+          );
+
         continue;
       }
 
@@ -2556,6 +2571,7 @@ export async function runCli():
               subAgents,
               activeCatalogSkills,
               skyMdContent,
+              activeModel,
             );
 
           console.log(
