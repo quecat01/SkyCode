@@ -1021,6 +1021,7 @@ read_file
 write_file
 edit_file
 run_shell_command
+web_search
 mcp_call
 delegate_to_agent
 ```
@@ -1069,6 +1070,18 @@ Argument:
 ```text
 command
 ```
+
+### `web_search`
+
+Searches the web using You.com's keyless public search endpoint and returns up to 8 results (title, URL, snippet).
+
+Argument:
+
+```text
+query
+```
+
+No API key or other credential is required or accepted. A shared free-tier quota applies; SkyCode reports quota exhaustion distinctly from other search failures.
 
 ### `mcp_call`
 
@@ -1120,7 +1133,7 @@ Approval is required before:
 - Editing a file
 - Running a shell command
 
-File reads, MCP calls, and sub-agent delegation do not prompt for approval in this mode.
+File reads, web searches, MCP calls, and sub-agent delegation do not prompt for approval in this mode.
 
 ### `auto-accept-edits`
 
@@ -1134,13 +1147,13 @@ No tool performs its real action.
 
 SkyCode returns a description of the operation it would have performed.
 
-This includes file operations, shell commands, MCP calls, and sub-agent delegation.
+This includes file operations, shell commands, web searches, MCP calls, and sub-agent delegation.
 
 ### `bypass`
 
 All tools run without approval prompts.
 
-**WARNING: Bypass mode is high risk. File changes, shell commands, MCP calls, and delegated tasks can execute immediately. Use it only when you trust the current request, active model, project, plugins, and MCP servers.**
+**WARNING: Bypass mode is high risk. File changes, shell commands, web searches, MCP calls, and delegated tasks can execute immediately. Use it only when you trust the current request, active model, project, plugins, and MCP servers.**
 
 ## Plugin System
 
@@ -1791,6 +1804,12 @@ Additional controls can include:
 - Firewall restrictions
 - A private VPN
 - Scoped API keys
+
+### Web Search Privacy
+
+The `web_search` tool sends the query text to You.com's public search endpoint (`api.you.com`) over HTTPS. No API key or other SkyCode credential is sent with it.
+
+Search queries can contain sensitive information. Review what a model chooses to search for, or use a permission mode where `web_search` requires approval, if that matters for your use case.
 
 ## Troubleshooting
 
