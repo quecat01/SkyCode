@@ -45,6 +45,7 @@ export const TOOL_NAMES = [
   "write_file",
   "edit_file",
   "run_shell_command",
+  "web_search",
   "mcp_call",
   "delegate_to_agent",
 ] as const;
@@ -105,6 +106,14 @@ export interface RunShellCommandArgs {
 }
 
 /**
+ * Arguments required by the web_search tool.
+ */
+export interface WebSearchArgs {
+  /** Search query text. */
+  query: string;
+}
+
+/**
  * Arguments required to invoke a tool exposed by a connected MCP server.
  */
 export interface McpCallArgs {
@@ -162,6 +171,12 @@ export type SkyToolRequest =
       tool: "run_shell_command";
       /** Validated shell-command arguments. */
       args: RunShellCommandArgs;
+    }
+  | {
+      /** Requests a web search. */
+      tool: "web_search";
+      /** Validated web_search arguments. */
+      args: WebSearchArgs;
     }
   | {
       /** Requests invocation of a connected MCP tool. */
@@ -249,6 +264,14 @@ const EXAMPLE_SKY_TOOL_INVOCATION: Record<
         },
       },
     ),
+  web_search: JSON.stringify(
+    {
+      tool: "web_search",
+      args: {
+        query: "example search query",
+      },
+    },
+  ),
   mcp_call: JSON.stringify(
     {
       tool: "mcp_call",
@@ -390,13 +413,14 @@ export function createSkyCodeSystemPrompt(
       : "- That engine is swappable, reached through a LiteLLM proxy. Like a brain, it is not who you are.";
   const promptLines = [
     "You are Sky Code, an AI-powered CLI coding assistant.",
-    "You help the user read, write, and edit files, run shell commands, and call connected MCP tools.",
+    "You help the user read, write, and edit files, run shell commands, search the web, and call connected MCP tools.",
     "",
     "You have access to these local tools:",
     "- read_file(path): Read the contents of a file",
     "- write_file(path, content): Write or create a file with the given content",
     "- edit_file(path, old_str, new_str): Replace old_str with new_str in a file",
     "- run_shell_command(command, background?): Run a shell command; set background to true for a long-running command that should not block the interactive prompt",
+    "- web_search(query): Search the web for current information and return a list of results with titles, URLs, and snippets",
     "",
     "Connected MCP tools are called through:",
     "- mcp_call(server, name, arguments): Call a tool exposed by a connected MCP server",
@@ -788,6 +812,18 @@ function parseSkyToolArgsForKnownTool(
       };
     }
 
+    case "web_search":
+      return {
+        tool,
+        args: {
+          query:
+            requireString(
+              args,
+              "query",
+            ),
+        },
+      };
+
     case "mcp_call":
       return {
         tool,
@@ -1043,6 +1079,17 @@ export interface ToolHandlers {
   ): Promise<ToolExecutionResult>;
 
   /**
+   * Executes a web_search request when web search support is active.
+   *
+   * @param {WebSearchArgs} args - Validated web_search arguments.
+   * @returns {Promise<ToolExecutionResult>} Result returned by the web search
+   * handler.
+   */
+  web_search?(
+    args: WebSearchArgs,
+  ): Promise<ToolExecutionResult>;
+
+  /**
    * Executes an MCP tool request when MCP support is active.
    *
    * @param {McpCallArgs} args - Validated MCP server/tool arguments.
@@ -1128,6 +1175,36 @@ export async function run_shell_command(
   return handlers.run_shell_command(
     args,
   );
+}
+
+/**
+ * Dispatches a web_search request when a web search handler exists.
+ *
+ * Sessions without active web search support return a normal failed tool
+ * result rather than throwing, allowing the model conversation to receive and
+ * respond to the unavailable-capability message.
+ *
+ * @param {WebSearchArgs} args - Validated web_search arguments.
+ * @param {ToolHandlers} handlers - Active tool-handler collection.
+ * @returns {Promise<ToolExecutionResult>} Web search handler result, or a
+ * failed result explaining that no web search handler is active.
+ *
+ * Side effect: may perform an outbound web search through
+ * handlers.web_search().
+ */
+export async function web_search(
+  args: WebSearchArgs,
+  handlers: ToolHandlers,
+): Promise<ToolExecutionResult> {
+  if (!handlers.web_search) {
+    return {
+      success: false,
+      output:
+        "No web search handler is active in this Sky Code session.",
+    };
+  }
+
+  return handlers.web_search(args);
 }
 
 /**
@@ -1235,6 +1312,12 @@ export async function executeSkyToolRequest(
 
     case "run_shell_command":
       return run_shell_command(
+        request.args,
+        handlers,
+      );
+
+    case "web_search":
+      return web_search(
         request.args,
         handlers,
       );

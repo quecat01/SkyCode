@@ -32,6 +32,7 @@ describe(
           "write-file",
           "edit-file",
           "shell-command",
+          "web-search",
           "mcp-call",
           "sub-agent",
         ]);

@@ -263,6 +263,11 @@ describe(
                 `touch ${JSON.stringify(markerPath)}`,
             }),
 
+            handlers.web_search?.({
+              query:
+                "should not run",
+            }),
+
             handlers.mcp_call?.({
               server:
                 "missing-server",
