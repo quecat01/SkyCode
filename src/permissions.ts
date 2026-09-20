@@ -39,6 +39,7 @@ export const PERMISSION_ACTIONS = [
   "edit-file",
   "shell-command",
   "web-search",
+  "web-fetch",
   "mcp-call",
   "sub-agent",
 ] as const;
@@ -183,6 +184,8 @@ const PERMISSION_POLICY:
       "prompt",
     "web-search":
       "allow",
+    "web-fetch":
+      "allow",
     "mcp-call":
       "allow",
     "sub-agent":
@@ -199,6 +202,8 @@ const PERMISSION_POLICY:
     "shell-command":
       "prompt",
     "web-search":
+      "allow",
+    "web-fetch":
       "allow",
     "mcp-call":
       "allow",
@@ -217,6 +222,8 @@ const PERMISSION_POLICY:
       "plan",
     "web-search":
       "plan",
+    "web-fetch":
+      "plan",
     "mcp-call":
       "plan",
     "sub-agent":
@@ -233,6 +240,8 @@ const PERMISSION_POLICY:
     "shell-command":
       "allow",
     "web-search":
+      "allow",
+    "web-fetch":
       "allow",
     "mcp-call":
       "allow",
@@ -291,6 +300,9 @@ export function getToolPermissionAction(
 
     case "web_search":
       return "web-search";
+
+    case "web_fetch":
+      return "web-fetch";
 
     case "mcp_call":
       return "mcp-call";
@@ -378,6 +390,14 @@ export function describePlanModeToolRequest(
           true,
         output:
           `Plan mode: Sky Code would search the web for "${request.args.query}", but no search request was sent.`,
+      };
+
+    case "web_fetch":
+      return {
+        success:
+          true,
+        output:
+          `Plan mode: Sky Code would fetch "${request.args.url}", but no web request was sent.`,
       };
 
     case "mcp_call":

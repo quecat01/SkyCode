@@ -268,6 +268,11 @@ describe(
                 "should not run",
             }),
 
+            handlers.web_fetch?.({
+              url:
+                "https://example.com/should-not-fetch",
+            }),
+
             handlers.mcp_call?.({
               server:
                 "missing-server",

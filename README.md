@@ -1022,6 +1022,7 @@ write_file
 edit_file
 run_shell_command
 web_search
+web_fetch
 mcp_call
 delegate_to_agent
 ```
@@ -1083,6 +1084,20 @@ query
 
 No API key or other credential is required or accepted. A shared free-tier quota applies; SkyCode reports quota exhaustion distinctly from other search failures.
 
+### `web_fetch`
+
+Fetches a specific public `https://` URL and returns its extracted readable text (title, status, content type, and a truncation flag).
+
+Argument:
+
+```text
+url
+```
+
+Only `https://` URLs are allowed. Before connecting, SkyCode resolves the hostname and rejects it if any resolved address is private, loopback, link-local, cloud metadata, or otherwise internal (covering both IPv4 and IPv6); every redirect target is revalidated the same way, up to 5 hops. Responses are capped at 2MB and extracted text at 8,000 characters, both flagged via `Truncated: yes` rather than failing outright. Only `text/html`, `text/plain`, and `application/xhtml+xml` are supported in this release; a PDF or other content type returns `unsupported_content_type`.
+
+Fetched page content is untrusted data: SkyCode never treats instructions found inside a fetched page as commands to follow.
+
 ### `mcp_call`
 
 Calls a tool exposed by a connected MCP server.
@@ -1133,7 +1148,7 @@ Approval is required before:
 - Editing a file
 - Running a shell command
 
-File reads, web searches, MCP calls, and sub-agent delegation do not prompt for approval in this mode.
+File reads, web searches, web fetches, MCP calls, and sub-agent delegation do not prompt for approval in this mode.
 
 ### `auto-accept-edits`
 
@@ -1147,13 +1162,13 @@ No tool performs its real action.
 
 SkyCode returns a description of the operation it would have performed.
 
-This includes file operations, shell commands, web searches, MCP calls, and sub-agent delegation.
+This includes file operations, shell commands, web searches, web fetches, MCP calls, and sub-agent delegation.
 
 ### `bypass`
 
 All tools run without approval prompts.
 
-**WARNING: Bypass mode is high risk. File changes, shell commands, web searches, MCP calls, and delegated tasks can execute immediately. Use it only when you trust the current request, active model, project, plugins, and MCP servers.**
+**WARNING: Bypass mode is high risk. File changes, shell commands, web searches, web fetches, MCP calls, and delegated tasks can execute immediately. Use it only when you trust the current request, active model, project, plugins, and MCP servers.**
 
 ## Plugin System
 
@@ -1810,6 +1825,12 @@ Additional controls can include:
 The `web_search` tool sends the query text to You.com's public search endpoint (`api.you.com`) over HTTPS. No API key or other SkyCode credential is sent with it.
 
 Search queries can contain sensitive information. Review what a model chooses to search for, or use a permission mode where `web_search` requires approval, if that matters for your use case.
+
+### Web Fetch Safety
+
+The `web_fetch` tool only connects over `https://`. Before connecting, and before following each redirect, it resolves the target hostname and refuses to proceed if any resolved address is private, loopback, link-local, cloud metadata, or otherwise internal, for both IPv4 and IPv6. The connection is made directly to the validated address rather than the hostname, so DNS cannot be re-resolved to something different between validation and connection.
+
+Fetched page content is treated as untrusted data. SkyCode does not act on instructions embedded in a fetched page, but this is a prompt-level safeguard, not a guarantee: review what a model fetches and does with the result, especially in bypass mode.
 
 ## Troubleshooting
 

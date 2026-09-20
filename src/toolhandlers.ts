@@ -55,6 +55,7 @@ import type {
   RunShellCommandArgs,
   ToolExecutionResult,
   ToolHandlers,
+  WebFetchArgs,
   WebSearchArgs,
   WriteFileArgs,
 } from "./tools.js";
@@ -63,6 +64,10 @@ import {
   confirmAction,
   formatError,
 } from "./utils.js";
+
+import {
+  fetchWebPage,
+} from "./webfetch.js";
 
 import {
   searchWeb,
@@ -480,6 +485,7 @@ async function executeMcpTool(
  * them with:
  * - background shell-command execution through BackgroundTaskRegistry;
  * - web search through You.com's keyless search endpoint;
+ * - web page fetching, with its own SSRF-safe address validation;
  * - MCP calls through the active connection collection;
  * - sub-agent delegation through the configured agent runtime.
  *
@@ -501,7 +507,7 @@ async function executeMcpTool(
  *
  * Side effects: returned handlers may access files, execute foreground or
  * background shell commands, prompt for approval, perform outbound web
- * searches, invoke MCP tools, register
+ * searches and page fetches, invoke MCP tools, register
  * background tasks, execute hooks, and launch sub-agent worker processes.
  */
 export function createSkyCodeToolHandlers(
@@ -677,6 +683,32 @@ export function createSkyCodeToolHandlers(
 
       return searchWeb(
         args.query,
+      );
+    },
+
+    async web_fetch(
+      args: WebFetchArgs,
+    ): Promise<ToolExecutionResult> {
+      if (
+        getPermissionDecision(
+          permissionRuntime
+            .getMode(),
+          "web-fetch",
+        ) ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "web_fetch",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      return fetchWebPage(
+        args.url,
       );
     },
 
