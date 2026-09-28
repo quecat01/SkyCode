@@ -49,6 +49,10 @@ export const TOOL_NAMES = [
   "web_fetch",
   "mcp_call",
   "delegate_to_agent",
+  "create_docx",
+  "create_xlsx",
+  "create_pdf",
+  "create_pptx",
 ] as const;
 
 /**
@@ -150,6 +154,152 @@ export interface DelegateToAgentArgs {
 }
 
 /**
+ * Arguments required by the create_docx tool.
+ *
+ * `content` uses the same supported Markdown subset as create_pdf (see
+ * docgen/markdown.ts): headings, paragraphs, bold/italic, inline code,
+ * bullet and numbered lists, and tables. The document's first level-1
+ * heading is rendered as the document title; page margins and the
+ * page-number footer are fixed defaults, not arguments.
+ */
+export interface CreateDocxArgs {
+  /** Destination .docx path. */
+  path: string;
+  /** Markdown source for the document. */
+  content: string;
+}
+
+/**
+ * Arguments required by the create_pdf tool.
+ *
+ * Shares create_docx's Markdown-content convention (see CreateDocxArgs).
+ */
+export interface CreatePdfArgs {
+  /** Destination .pdf path. */
+  path: string;
+  /** Markdown source for the document. */
+  content: string;
+}
+
+/**
+ * One cell value accepted by create_xlsx.
+ *
+ * A plain string, number, or boolean is stored as that native Excel type.
+ * A string beginning with "=" is stored as a formula. A `{ date }` object
+ * (ISO 8601 date, e.g. "2026-09-27") is stored as a genuine Excel date
+ * rather than as text.
+ */
+export type XlsxCellValue =
+  | string
+  | number
+  | boolean
+  | {
+      /** ISO 8601 date string, e.g. "2026-09-27". */
+      date: string;
+    };
+
+/**
+ * One worksheet definition accepted by create_xlsx.
+ */
+export interface XlsxSheetInput {
+  /** Worksheet name, shown on its tab. */
+  name: string;
+  /**
+   * Optional header row. When present, it is rendered bold and frozen at
+   * the top of the sheet; column widths are auto-sized to content either
+   * way.
+   */
+  headers?: string[];
+  /** Data rows; each inner array is one row of cell values. */
+  rows: XlsxCellValue[][];
+}
+
+/**
+ * Arguments required by the create_xlsx tool.
+ */
+export interface CreateXlsxArgs {
+  /** Destination .xlsx path. */
+  path: string;
+  /** One or more worksheets to include in the workbook. */
+  sheets: XlsxSheetInput[];
+}
+
+/**
+ * A pptx title slide: the deck's opening slide, a large title with an
+ * optional subtitle and a few identifying detail lines.
+ */
+export interface PptxTitleSlide {
+  type: "title";
+  /** Main slide title. */
+  title: string;
+  /** Optional subtitle shown beneath the title. */
+  subtitle?: string;
+  /** Optional short detail lines shown beneath the title/subtitle. */
+  bullets?: string[];
+}
+
+/**
+ * A pptx content slide: the general-purpose template for text, bullets,
+ * a table, and/or an image.
+ */
+export interface PptxContentSlide {
+  type: "content";
+  /** Optional slide heading. */
+  title?: string;
+  /** Optional bullet list. */
+  bullets?: string[];
+  /** Optional table. */
+  table?: {
+    /** Column header labels. */
+    headers: string[];
+    /** Data rows; each row has the same length as headers. */
+    rows: string[][];
+  };
+  /** Optional image. Only PNG, JPEG, GIF, and BMP files are accepted. */
+  image?: {
+    /** Path to the image file. */
+    path: string;
+    /** Optional caption shown beneath the image. */
+    caption?: string;
+  };
+}
+
+/**
+ * A pptx chart slide: a native, editable bar chart comparing one or more
+ * numeric series across a shared set of categories.
+ */
+export interface PptxChartSlide {
+  type: "chart";
+  /** Optional slide heading. */
+  title?: string;
+  /** Category labels along the chart's category axis. */
+  categories: string[];
+  /** One or more data series plotted against categories. */
+  series: {
+    /** Series name shown in the chart legend. */
+    name: string;
+    /** Numeric values, one per category, in the same order as categories. */
+    values: number[];
+  }[];
+}
+
+/** Discriminated union of every supported create_pptx slide template. */
+export type PptxSlideInput =
+  | PptxTitleSlide
+  | PptxContentSlide
+  | PptxChartSlide;
+
+/**
+ * Arguments required by the create_pptx tool.
+ */
+export interface CreatePptxArgs {
+  /** Destination .pptx path. */
+  path: string;
+  /** Slides in presentation order. */
+  slides: PptxSlideInput[];
+}
+
+/**
  * Fully validated tool request produced from a model `sky-tool` block.
  *
  * This discriminated union associates every tool name with the exact argument
@@ -204,6 +354,30 @@ export type SkyToolRequest =
       tool: "delegate_to_agent";
       /** Validated sub-agent delegation arguments. */
       args: DelegateToAgentArgs;
+    }
+  | {
+      /** Requests creating a genuine Word document. */
+      tool: "create_docx";
+      /** Validated create_docx arguments. */
+      args: CreateDocxArgs;
+    }
+  | {
+      /** Requests creating a genuine Excel workbook. */
+      tool: "create_xlsx";
+      /** Validated create_xlsx arguments. */
+      args: CreateXlsxArgs;
+    }
+  | {
+      /** Requests creating a genuine PDF document. */
+      tool: "create_pdf";
+      /** Validated create_pdf arguments. */
+      args: CreatePdfArgs;
+    }
+  | {
+      /** Requests creating a genuine PowerPoint presentation. */
+      tool: "create_pptx";
+      /** Validated create_pptx arguments. */
+      args: CreatePptxArgs;
     };
 
 /**
@@ -316,6 +490,64 @@ const EXAMPLE_SKY_TOOL_INVOCATION: Record<
         },
       },
     ),
+  create_docx: JSON.stringify(
+    {
+      tool: "create_docx",
+      args: {
+        path: "/path/to/file.docx",
+        content:
+          "# Title\n\nA paragraph.",
+      },
+    },
+  ),
+  create_xlsx: JSON.stringify(
+    {
+      tool: "create_xlsx",
+      args: {
+        path: "/path/to/file.xlsx",
+        sheets: [
+          {
+            name: "Sheet1",
+            headers: [
+              "Name",
+              "Amount",
+            ],
+            rows: [
+              [
+                "Widget",
+                12,
+              ],
+            ],
+          },
+        ],
+      },
+    },
+  ),
+  create_pdf: JSON.stringify(
+    {
+      tool: "create_pdf",
+      args: {
+        path: "/path/to/file.pdf",
+        content:
+          "# Title\n\nA paragraph.",
+      },
+    },
+  ),
+  create_pptx: JSON.stringify(
+    {
+      tool: "create_pptx",
+      args: {
+        path: "/path/to/file.pptx",
+        slides: [
+          {
+            type: "title",
+            title:
+              "Presentation Title",
+          },
+        ],
+      },
+    },
+  ),
 };
 
 /**
@@ -445,6 +677,12 @@ export function createSkyCodeSystemPrompt(
     "- run_shell_command(command, background?): Run a shell command; set background to true for a long-running command that should not block the interactive prompt",
     "- web_search(query): Search the web for current information and return a list of results with titles, URLs, and snippets",
     "- web_fetch(url): Fetch and read the readable text content of one specific public https:// URL",
+    "- create_docx(path, content): Create a genuine Word document. content is Markdown (headings, paragraphs, bold/italic, inline code, bullet/numbered lists, tables); the first level-1 heading becomes the document title.",
+    "- create_pdf(path, content): Create a genuine PDF document. Same Markdown content rules as create_docx.",
+    "- create_xlsx(path, sheets): Create a genuine Excel workbook. sheets is an array of {name, headers?, rows}; rows is an array of arrays of cell values (string, number, boolean, or {date:\"YYYY-MM-DD\"}); a cell value starting with \"=\" is a formula.",
+    "- create_pptx(path, slides): Create a genuine PowerPoint presentation. slides is an array of {type:\"title\", title, subtitle?, bullets?} or {type:\"content\", title?, bullets?, table?, image?} or {type:\"chart\", title?, categories, series} (series is [{name, values}]; use real numeric values so a bar chart's proportions are accurate).",
+    "",
+    "Use create_docx/create_xlsx/create_pdf/create_pptx instead of write_file whenever the user wants a real Word, Excel, PDF, or PowerPoint file. write_file only produces plain text and cannot create these formats. None of the four document tools will overwrite an existing file; choose a different path if one is already there.",
     "",
     "Web access guidance:",
     "- Use web_search for a topic, question, or anything needing current/external information (news, prices, weather, recent updates). Use web_fetch when the user gives you a specific URL, or to verify a web_search result by reading the actual page instead of relying on its snippet.",
@@ -632,6 +870,454 @@ function requireRecord(
   }
 
   return value;
+}
+
+/**
+ * Validates that a raw value is an array of strings.
+ *
+ * Lower-level than requireStringArray(): takes the candidate value directly
+ * rather than reading it off a keyed argument object, so it can also
+ * validate array-of-string values that are not themselves a named property
+ * (for example, one row of a create_pptx table).
+ *
+ * @param {unknown} value - Candidate value.
+ * @param {string} context - Human-readable location used in the error
+ * message.
+ * @returns {string[]} The validated string array.
+ * @throws {Error} If value is not an array of strings.
+ */
+function requireStringArrayValue(
+  value: unknown,
+  context: string,
+): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) => typeof item === "string",
+    )
+  ) {
+    throw new Error(
+      `Tool argument "${context}" must be an array of strings`,
+    );
+  }
+
+  return value as string[];
+}
+
+/**
+ * Retrieves and validates an array-of-strings tool argument.
+ *
+ * Used for optional string-list fields such as create_xlsx's `headers` and
+ * create_pptx's `bullets`/`categories`.
+ *
+ * @param {Record<string, unknown>} args - Parsed tool argument object.
+ * @param {string} key - Property name whose value should be validated.
+ * @param {boolean} allowMissing - Whether an undefined property returns
+ * undefined instead of throwing. Defaults to false.
+ * @returns {string[] | undefined} The validated string array, or undefined
+ * when the property is omitted and allowMissing is true.
+ * @throws {Error} If the property is present but is not an array of strings,
+ * or is missing while allowMissing is false.
+ */
+function requireStringArray(
+  args: Record<string, unknown>,
+  key: string,
+  allowMissing: boolean = false,
+): string[] | undefined {
+  const value = args[key];
+
+  if (value === undefined && allowMissing) {
+    return undefined;
+  }
+
+  return requireStringArrayValue(
+    value,
+    key,
+  );
+}
+
+/**
+ * Validates one create_xlsx cell value.
+ *
+ * Accepts a plain string, number, or boolean (stored as that native Excel
+ * type by docgen/xlsx.ts), or a `{ date: "YYYY-MM-DD" }` object (stored as a
+ * genuine Excel date). Any other shape is rejected.
+ *
+ * @param {unknown} value - Raw cell value from model JSON.
+ * @param {string} context - Human-readable location used in the error
+ * message (e.g. "sheets[0].rows[2][1]").
+ * @returns {XlsxCellValue} The validated cell value.
+ * @throws {Error} If value is not one of the accepted shapes.
+ */
+function validateXlsxCellValue(
+  value: unknown,
+  context: string,
+): XlsxCellValue {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (
+    isRecord(value) &&
+    typeof value.date === "string"
+  ) {
+    return {
+      date: value.date,
+    };
+  }
+
+  throw new Error(
+    `Tool argument "${context}" must be a string, number, boolean, or {"date":"YYYY-MM-DD"}`,
+  );
+}
+
+/**
+ * Validates the `sheets` argument for create_xlsx.
+ *
+ * @param {Record<string, unknown>} args - Parsed tool argument object.
+ * @returns {XlsxSheetInput[]} Validated worksheet definitions.
+ * @throws {Error} If `sheets` is missing, empty, or any sheet's shape is
+ * invalid.
+ */
+function validateXlsxSheets(
+  args: Record<string, unknown>,
+): XlsxSheetInput[] {
+  const rawSheets = args.sheets;
+
+  if (
+    !Array.isArray(rawSheets) ||
+    rawSheets.length === 0
+  ) {
+    throw new Error(
+      'Tool argument "sheets" must be a non-empty array',
+    );
+  }
+
+  return rawSheets.map(
+    (rawSheet, sheetIndex) => {
+      if (!isRecord(rawSheet)) {
+        throw new Error(
+          `sheets[${sheetIndex}] must be a JSON object`,
+        );
+      }
+
+      const name = requireString(
+        rawSheet,
+        "name",
+      );
+
+      const headers = requireStringArray(
+        rawSheet,
+        "headers",
+        true,
+      );
+
+      const rawRows = rawSheet.rows;
+
+      if (!Array.isArray(rawRows)) {
+        throw new Error(
+          `sheets[${sheetIndex}].rows must be an array`,
+        );
+      }
+
+      const rows = rawRows.map(
+        (rawRow, rowIndex) => {
+          if (!Array.isArray(rawRow)) {
+            throw new Error(
+              `sheets[${sheetIndex}].rows[${rowIndex}] must be an array`,
+            );
+          }
+
+          return rawRow.map(
+            (cell, cellIndex) =>
+              validateXlsxCellValue(
+                cell,
+                `sheets[${sheetIndex}].rows[${rowIndex}][${cellIndex}]`,
+              ),
+          );
+        },
+      );
+
+      return {
+        name,
+        ...(headers
+          ? {
+              headers,
+            }
+          : {}),
+        rows,
+      };
+    },
+  );
+}
+
+/**
+ * Validates one create_pptx slide.
+ *
+ * The slide's `type` field selects which other fields are required, matching
+ * the PptxSlideInput discriminated union.
+ *
+ * @param {unknown} rawSlide - Raw slide value from model JSON.
+ * @param {number} index - Slide index, used only for error messages.
+ * @returns {PptxSlideInput} The validated slide.
+ * @throws {Error} If the slide is not an object, its `type` is unrecognized,
+ * or a field required by that type is missing or malformed.
+ */
+function validatePptxSlide(
+  rawSlide: unknown,
+  index: number,
+): PptxSlideInput {
+  if (!isRecord(rawSlide)) {
+    throw new Error(
+      `slides[${index}] must be a JSON object`,
+    );
+  }
+
+  const type = rawSlide.type;
+
+  if (type === "title") {
+    const titleBullets =
+      requireStringArray(
+        rawSlide,
+        "bullets",
+        true,
+      );
+
+    return {
+      type: "title",
+      title: requireString(
+        rawSlide,
+        "title",
+      ),
+      ...(typeof rawSlide.subtitle ===
+      "string"
+        ? {
+            subtitle:
+              rawSlide.subtitle,
+          }
+        : {}),
+      ...(titleBullets
+        ? {
+            bullets: titleBullets,
+          }
+        : {}),
+    };
+  }
+
+  if (type === "content") {
+    const table = rawSlide.table;
+    let validatedTable:
+      | {
+          headers: string[];
+          rows: string[][];
+        }
+      | undefined;
+
+    if (table !== undefined) {
+      if (!isRecord(table)) {
+        throw new Error(
+          `slides[${index}].table must be a JSON object`,
+        );
+      }
+
+      const tableHeaders =
+        requireStringArrayValue(
+          table.headers,
+          `slides[${index}].table.headers`,
+        );
+
+      const rawTableRows =
+        table.rows;
+
+      if (
+        !Array.isArray(rawTableRows)
+      ) {
+        throw new Error(
+          `slides[${index}].table.rows must be an array`,
+        );
+      }
+
+      validatedTable = {
+        headers: tableHeaders,
+        rows: rawTableRows.map(
+          (rawRow, rowIndex) =>
+            requireStringArrayValue(
+              rawRow,
+              `slides[${index}].table.rows[${rowIndex}]`,
+            ),
+        ),
+      };
+    }
+
+    const image = rawSlide.image;
+    let validatedImage:
+      | {
+          path: string;
+          caption?: string;
+        }
+      | undefined;
+
+    if (image !== undefined) {
+      if (!isRecord(image)) {
+        throw new Error(
+          `slides[${index}].image must be a JSON object`,
+        );
+      }
+
+      validatedImage = {
+        path: requireString(
+          image,
+          "path",
+        ),
+        ...(typeof image.caption ===
+        "string"
+          ? {
+              caption:
+                image.caption,
+            }
+          : {}),
+      };
+    }
+
+    const contentBullets =
+      requireStringArray(
+        rawSlide,
+        "bullets",
+        true,
+      );
+
+    return {
+      type: "content",
+      ...(typeof rawSlide.title ===
+      "string"
+        ? {
+            title: rawSlide.title,
+          }
+        : {}),
+      ...(contentBullets
+        ? {
+            bullets: contentBullets,
+          }
+        : {}),
+      ...(validatedTable
+        ? {
+            table: validatedTable,
+          }
+        : {}),
+      ...(validatedImage
+        ? {
+            image: validatedImage,
+          }
+        : {}),
+    };
+  }
+
+  if (type === "chart") {
+    const categories =
+      requireStringArrayValue(
+        rawSlide.categories,
+        "categories",
+      );
+
+    const rawSeries = rawSlide.series;
+
+    if (
+      !Array.isArray(rawSeries) ||
+      rawSeries.length === 0
+    ) {
+      throw new Error(
+        `slides[${index}].series must be a non-empty array`,
+      );
+    }
+
+    const series = rawSeries.map(
+      (rawOneSeries, seriesIndex) => {
+        if (!isRecord(rawOneSeries)) {
+          throw new Error(
+            `slides[${index}].series[${seriesIndex}] must be a JSON object`,
+          );
+        }
+
+        const name = requireString(
+          rawOneSeries,
+          "name",
+        );
+
+        const rawValues =
+          rawOneSeries.values;
+
+        if (
+          !Array.isArray(rawValues) ||
+          !rawValues.every(
+            (value) =>
+              typeof value ===
+              "number",
+          )
+        ) {
+          throw new Error(
+            `slides[${index}].series[${seriesIndex}].values must be an array of numbers`,
+          );
+        }
+
+        return {
+          name,
+          values:
+            rawValues as number[],
+        };
+      },
+    );
+
+    return {
+      type: "chart",
+      ...(typeof rawSlide.title ===
+      "string"
+        ? {
+            title: rawSlide.title,
+          }
+        : {}),
+      categories,
+      series,
+    };
+  }
+
+  throw new Error(
+    `slides[${index}].type must be "title", "content", or "chart"`,
+  );
+}
+
+/**
+ * Validates the `slides` argument for create_pptx.
+ *
+ * @param {Record<string, unknown>} args - Parsed tool argument object.
+ * @returns {PptxSlideInput[]} Validated slide definitions.
+ * @throws {Error} If `slides` is missing, empty, or any slide's shape is
+ * invalid.
+ */
+function validatePptxSlides(
+  args: Record<string, unknown>,
+): PptxSlideInput[] {
+  const rawSlides = args.slides;
+
+  if (
+    !Array.isArray(rawSlides) ||
+    rawSlides.length === 0
+  ) {
+    throw new Error(
+      'Tool argument "slides" must be a non-empty array',
+    );
+  }
+
+  return rawSlides.map(
+    (rawSlide, index) =>
+      validatePptxSlide(
+        rawSlide,
+        index,
+      ),
+  );
 }
 
 /**
@@ -939,6 +1625,52 @@ function parseSkyToolArgsForKnownTool(
         },
       };
     }
+
+    case "create_docx":
+    case "create_pdf":
+      return {
+        tool,
+        args: {
+          path: requireString(
+            args,
+            "path",
+          ),
+          content: requireString(
+            args,
+            "content",
+          ),
+        },
+      };
+
+    case "create_xlsx":
+      return {
+        tool,
+        args: {
+          path: requireString(
+            args,
+            "path",
+          ),
+          sheets:
+            validateXlsxSheets(
+              args,
+            ),
+        },
+      };
+
+    case "create_pptx":
+      return {
+        tool,
+        args: {
+          path: requireString(
+            args,
+            "path",
+          ),
+          slides:
+            validatePptxSlides(
+              args,
+            ),
+        },
+      };
   }
 }
 
@@ -1171,6 +1903,50 @@ export interface ToolHandlers {
   delegate_to_agent?(
     args: DelegateToAgentArgs,
   ): Promise<ToolExecutionResult>;
+
+  /**
+   * Executes a create_docx request.
+   *
+   * @param {CreateDocxArgs} args - Validated create_docx arguments.
+   * @returns {Promise<ToolExecutionResult>} Result of the document-creation
+   * operation.
+   */
+  create_docx(
+    args: CreateDocxArgs,
+  ): Promise<ToolExecutionResult>;
+
+  /**
+   * Executes a create_xlsx request.
+   *
+   * @param {CreateXlsxArgs} args - Validated create_xlsx arguments.
+   * @returns {Promise<ToolExecutionResult>} Result of the workbook-creation
+   * operation.
+   */
+  create_xlsx(
+    args: CreateXlsxArgs,
+  ): Promise<ToolExecutionResult>;
+
+  /**
+   * Executes a create_pdf request.
+   *
+   * @param {CreatePdfArgs} args - Validated create_pdf arguments.
+   * @returns {Promise<ToolExecutionResult>} Result of the document-creation
+   * operation.
+   */
+  create_pdf(
+    args: CreatePdfArgs,
+  ): Promise<ToolExecutionResult>;
+
+  /**
+   * Executes a create_pptx request.
+   *
+   * @param {CreatePptxArgs} args - Validated create_pptx arguments.
+   * @returns {Promise<ToolExecutionResult>} Result of the
+   * presentation-creation operation.
+   */
+  create_pptx(
+    args: CreatePptxArgs,
+  ): Promise<ToolExecutionResult>;
 }
 
 /**
@@ -1367,6 +2143,70 @@ export async function delegate_to_agent(
 }
 
 /**
+ * Dispatches a create_docx request to the configured handler.
+ *
+ * @param {CreateDocxArgs} args - Validated create_docx arguments.
+ * @param {ToolHandlers} handlers - Active tool-handler collection.
+ * @returns {Promise<ToolExecutionResult>} Result returned by the handler.
+ *
+ * Side effect: may create a file through handlers.create_docx().
+ */
+export async function create_docx(
+  args: CreateDocxArgs,
+  handlers: ToolHandlers,
+): Promise<ToolExecutionResult> {
+  return handlers.create_docx(args);
+}
+
+/**
+ * Dispatches a create_xlsx request to the configured handler.
+ *
+ * @param {CreateXlsxArgs} args - Validated create_xlsx arguments.
+ * @param {ToolHandlers} handlers - Active tool-handler collection.
+ * @returns {Promise<ToolExecutionResult>} Result returned by the handler.
+ *
+ * Side effect: may create a file through handlers.create_xlsx().
+ */
+export async function create_xlsx(
+  args: CreateXlsxArgs,
+  handlers: ToolHandlers,
+): Promise<ToolExecutionResult> {
+  return handlers.create_xlsx(args);
+}
+
+/**
+ * Dispatches a create_pdf request to the configured handler.
+ *
+ * @param {CreatePdfArgs} args - Validated create_pdf arguments.
+ * @param {ToolHandlers} handlers - Active tool-handler collection.
+ * @returns {Promise<ToolExecutionResult>} Result returned by the handler.
+ *
+ * Side effect: may create a file through handlers.create_pdf().
+ */
+export async function create_pdf(
+  args: CreatePdfArgs,
+  handlers: ToolHandlers,
+): Promise<ToolExecutionResult> {
+  return handlers.create_pdf(args);
+}
+
+/**
+ * Dispatches a create_pptx request to the configured handler.
+ *
+ * @param {CreatePptxArgs} args - Validated create_pptx arguments.
+ * @param {ToolHandlers} handlers - Active tool-handler collection.
+ * @returns {Promise<ToolExecutionResult>} Result returned by the handler.
+ *
+ * Side effect: may create a file through handlers.create_pptx().
+ */
+export async function create_pptx(
+  args: CreatePptxArgs,
+  handlers: ToolHandlers,
+): Promise<ToolExecutionResult> {
+  return handlers.create_pptx(args);
+}
+
+/**
  * Executes one validated SkyToolRequest using the active handler collection.
  *
  * The request's discriminating `tool` property determines which thin dispatch
@@ -1429,6 +2269,30 @@ export async function executeSkyToolRequest(
 
     case "delegate_to_agent":
       return delegate_to_agent(
+        request.args,
+        handlers,
+      );
+
+    case "create_docx":
+      return create_docx(
+        request.args,
+        handlers,
+      );
+
+    case "create_xlsx":
+      return create_xlsx(
+        request.args,
+        handlers,
+      );
+
+    case "create_pdf":
+      return create_pdf(
+        request.args,
+        handlers,
+      );
+
+    case "create_pptx":
+      return create_pptx(
         request.args,
         handlers,
       );

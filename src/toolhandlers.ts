@@ -34,6 +34,26 @@ import {
   writeFileToDisk,
 } from "./fileops.js";
 
+import {
+  createDocxFile,
+} from "./docgen/docx.js";
+
+import {
+  createXlsxFile,
+} from "./docgen/xlsx.js";
+
+import {
+  createPdfFile,
+} from "./docgen/pdf.js";
+
+import {
+  createPptxFile,
+} from "./docgen/pptx.js";
+
+import {
+  formatFileSize,
+} from "./docgen/shared.js";
+
 import type {
   HookRegistry,
 } from "./hooks.js";
@@ -48,6 +68,10 @@ import {
 } from "./permissions.js";
 
 import type {
+  CreateDocxArgs,
+  CreatePdfArgs,
+  CreatePptxArgs,
+  CreateXlsxArgs,
   DelegateToAgentArgs,
   EditFileArgs,
   McpCallArgs,
@@ -420,6 +444,268 @@ export function createPhase1ToolHandlers(
         workingDirectory,
         approvalPrompt,
       );
+    },
+
+    // The four document-generation tools share write_file's plan/prompt/
+    // execute permission sequence (see getToolPermissionAction in
+    // permissions.ts, which maps all of them to the write-file category) but
+    // never overwrite an existing destination; a DestinationExistsError from
+    // the docgen layer surfaces through formatError exactly like any other
+    // build failure below.
+    async create_docx(
+      args: CreateDocxArgs,
+    ): Promise<ToolExecutionResult> {
+      const decision =
+        getPermissionDecision(
+          getMode(),
+          "write-file",
+        );
+
+      if (
+        decision ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "create_docx",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      const resolvedPath =
+        resolveFilePath(
+          args.path,
+          workingDirectory,
+        );
+
+      if (
+        decision ===
+          "prompt"
+      ) {
+        const approved =
+          await approvalPrompt(
+            `Allow Sky Code to create a DOCX file at ${resolvedPath}?`,
+          );
+
+        if (!approved) {
+          return failed(
+            `Permission denied. Sky Code did not create ${resolvedPath}.`,
+          );
+        }
+      }
+
+      try {
+        const result =
+          await createDocxFile(
+            workingDirectory,
+            args,
+          );
+
+        return succeeded(
+          `Created DOCX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+        );
+      } catch (error) {
+        return failed(
+          formatError(
+            error,
+          ),
+        );
+      }
+    },
+
+    async create_xlsx(
+      args: CreateXlsxArgs,
+    ): Promise<ToolExecutionResult> {
+      const decision =
+        getPermissionDecision(
+          getMode(),
+          "write-file",
+        );
+
+      if (
+        decision ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "create_xlsx",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      const resolvedPath =
+        resolveFilePath(
+          args.path,
+          workingDirectory,
+        );
+
+      if (
+        decision ===
+          "prompt"
+      ) {
+        const approved =
+          await approvalPrompt(
+            `Allow Sky Code to create an XLSX file at ${resolvedPath}?`,
+          );
+
+        if (!approved) {
+          return failed(
+            `Permission denied. Sky Code did not create ${resolvedPath}.`,
+          );
+        }
+      }
+
+      try {
+        const result =
+          await createXlsxFile(
+            workingDirectory,
+            args,
+          );
+
+        return succeeded(
+          `Created XLSX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+        );
+      } catch (error) {
+        return failed(
+          formatError(
+            error,
+          ),
+        );
+      }
+    },
+
+    async create_pdf(
+      args: CreatePdfArgs,
+    ): Promise<ToolExecutionResult> {
+      const decision =
+        getPermissionDecision(
+          getMode(),
+          "write-file",
+        );
+
+      if (
+        decision ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "create_pdf",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      const resolvedPath =
+        resolveFilePath(
+          args.path,
+          workingDirectory,
+        );
+
+      if (
+        decision ===
+          "prompt"
+      ) {
+        const approved =
+          await approvalPrompt(
+            `Allow Sky Code to create a PDF file at ${resolvedPath}?`,
+          );
+
+        if (!approved) {
+          return failed(
+            `Permission denied. Sky Code did not create ${resolvedPath}.`,
+          );
+        }
+      }
+
+      try {
+        const result =
+          await createPdfFile(
+            workingDirectory,
+            args,
+          );
+
+        return succeeded(
+          `Created PDF file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+        );
+      } catch (error) {
+        return failed(
+          formatError(
+            error,
+          ),
+        );
+      }
+    },
+
+    async create_pptx(
+      args: CreatePptxArgs,
+    ): Promise<ToolExecutionResult> {
+      const decision =
+        getPermissionDecision(
+          getMode(),
+          "write-file",
+        );
+
+      if (
+        decision ===
+          "plan"
+      ) {
+        return describePlanModeToolRequest(
+          {
+            tool:
+              "create_pptx",
+            args,
+          },
+          workingDirectory,
+        );
+      }
+
+      const resolvedPath =
+        resolveFilePath(
+          args.path,
+          workingDirectory,
+        );
+
+      if (
+        decision ===
+          "prompt"
+      ) {
+        const approved =
+          await approvalPrompt(
+            `Allow Sky Code to create a PPTX file at ${resolvedPath}?`,
+          );
+
+        if (!approved) {
+          return failed(
+            `Permission denied. Sky Code did not create ${resolvedPath}.`,
+          );
+        }
+      }
+
+      try {
+        const result =
+          await createPptxFile(
+            workingDirectory,
+            args,
+          );
+
+        return succeeded(
+          `Created PPTX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+        );
+      } catch (error) {
+        return failed(
+          formatError(
+            error,
+          ),
+        );
+      }
     },
   };
 }

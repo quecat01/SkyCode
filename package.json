@@ -26,14 +26,22 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "docx": "9.7.2",
     "dotenv": "17.4.2",
+    "exceljs": "^4.4.0",
     "inquirer": "14.0.2",
+    "jszip": "^3.10.2",
     "markdansi": "0.3.3",
+    "marked": "^18.0.11",
+    "pdfkit": "^0.20.2",
+    "pdfkit-table": "0.2.11",
+    "pptxgenjs": "4.0.1",
     "uuid": "14.0.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
     "nodemon": "3.1.14",
+    "pdfjs-dist": "^6.3.289",
     "ts-node": "10.9.2",
     "typescript": "7.0.2",
     "vitest": "4.1.10"

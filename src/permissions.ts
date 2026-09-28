@@ -21,6 +21,10 @@ import {
   describeWriteFilePlan,
 } from "./fileops.js";
 
+import {
+  describeCreateDocumentPlan,
+} from "./docgen/shared.js";
+
 import type {
   SkyToolRequest,
   ToolExecutionResult,
@@ -309,6 +313,17 @@ export function getToolPermissionAction(
 
     case "delegate_to_agent":
       return "sub-agent";
+
+    // The four document-generation tools reuse the write-file category: they
+    // write a new file to disk and never overwrite an existing one (a
+    // stronger guarantee than write_file itself), so the same permission
+    // decision per mode (allow/prompt/plan) applies without needing a
+    // separate policy category.
+    case "create_docx":
+    case "create_xlsx":
+    case "create_pdf":
+    case "create_pptx":
+      return "write-file";
   }
 }
 
@@ -414,6 +429,54 @@ export function describePlanModeToolRequest(
           true,
         output:
           `Plan mode: Sky Code would delegate the task to sub-agent "${request.args.agent}", but no worker process was started.`,
+      };
+
+    case "create_docx":
+      return {
+        success:
+          true,
+        output:
+          describeCreateDocumentPlan(
+            request.args.path,
+            workingDirectory,
+            "DOCX",
+          ),
+      };
+
+    case "create_xlsx":
+      return {
+        success:
+          true,
+        output:
+          describeCreateDocumentPlan(
+            request.args.path,
+            workingDirectory,
+            "XLSX",
+          ),
+      };
+
+    case "create_pdf":
+      return {
+        success:
+          true,
+        output:
+          describeCreateDocumentPlan(
+            request.args.path,
+            workingDirectory,
+            "PDF",
+          ),
+      };
+
+    case "create_pptx":
+      return {
+        success:
+          true,
+        output:
+          describeCreateDocumentPlan(
+            request.args.path,
+            workingDirectory,
+            "PPTX",
+          ),
       };
   }
 }

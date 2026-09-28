@@ -1025,6 +1025,10 @@ web_search
 web_fetch
 mcp_call
 delegate_to_agent
+create_docx
+create_xlsx
+create_pdf
+create_pptx
 ```
 
 ### `read_file`
@@ -1124,6 +1128,64 @@ context
 
 `context` is optional.
 
+### `create_docx`
+
+Creates a Word document (`.docx`) from Markdown.
+
+Arguments:
+
+```text
+path
+content
+```
+
+Supports headings, paragraphs, bold/italic (including nested combinations), inline code, bullet lists, numbered lists, and tables. The document's first level-1 heading is styled as its title. Page margins (1 inch) and a page-number footer are applied automatically and are not configurable.
+
+### `create_xlsx`
+
+Creates an Excel workbook (`.xlsx`) from structured sheet data.
+
+Arguments:
+
+```text
+path
+sheets
+```
+
+Each entry in `sheets` has a `name`, an optional `headers` row (rendered bold and frozen at the top), and `rows` of cell values. A cell value is a string, number, boolean, or `{"date":"YYYY-MM-DD"}` for a real Excel date; a string starting with `=` is written as a formula. Columns are auto-sized to their content, and data rows use alternating banding with thin borders.
+
+### `create_pdf`
+
+Creates a PDF from the same Markdown subset as `create_docx`.
+
+Arguments:
+
+```text
+path
+content
+```
+
+Page margins (1 inch) and a page-number footer are applied automatically and are not configurable.
+
+### `create_pptx`
+
+Creates a PowerPoint presentation (`.pptx`) from a list of slides.
+
+Arguments:
+
+```text
+path
+slides
+```
+
+Each entry in `slides` is one of three templates, chosen by its `type`:
+
+- `title`: `title`, optional `subtitle`, optional `bullets` (short detail lines).
+- `content`: optional `title`, optional `bullets`, optional `table` (`headers` + `rows`), optional `image` (`path` + optional `caption`). Only PNG, JPEG, GIF, and BMP images are accepted.
+- `chart`: optional `title`, `categories` (category-axis labels), and `series` (one or more `{"name", "values"}` data series). Renders as a native, editable PowerPoint bar chart plotted directly from the given values, not a picture.
+
+None of the four document tools ever overwrites an existing file. If the destination path already exists, SkyCode reports the conflict and writes nothing; the model must choose a different path.
+
 ## Tool-Calling Protocol
 
 The model requests a tool using a fenced `sky-tool` block:
@@ -1144,7 +1206,7 @@ The protocol works even when the selected model does not support native function
 
 Approval is required before:
 
-- Writing a file
+- Writing a file (including `create_docx`, `create_xlsx`, `create_pdf`, and `create_pptx`, which reuse the same approval as a file write)
 - Editing a file
 - Running a shell command
 
@@ -1616,8 +1678,8 @@ npm test
 The verified test result is:
 
 ```text
-Test Files  51 passed
-Tests       311 passed
+Test Files  74 passed
+Tests       539 passed | 2 skipped
 ```
 
 The suite includes:
@@ -1640,6 +1702,7 @@ The suite includes:
 - Integration tests
 - Live source-wiring tests
 - Local MCP stdio, SSE, and Streamable HTTP fixtures
+- Document-generation tests (`create_docx`, `create_xlsx`, `create_pdf`, `create_pptx`, their shared write-safety and Markdown-parsing infrastructure, tool-schema validation, and permission-mode integration)
 
 LiteLLM responses are mocked in automated tests. The tests do not expose or use the real LiteLLM API key.
 
@@ -1717,6 +1780,13 @@ npm run dev
 │   ├── history.ts
 │   ├── tools.ts
 │   ├── toolhandlers.ts
+│   ├── docgen/
+│   │   ├── shared.ts
+│   │   ├── markdown.ts
+│   │   ├── docx.ts
+│   │   ├── xlsx.ts
+│   │   ├── pdf.ts
+│   │   └── pptx.ts
 │   ├── mcp.ts
 │   ├── plugins.ts
 │   ├── hooks.ts
