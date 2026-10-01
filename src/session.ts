@@ -26,11 +26,28 @@ import {
   v4 as createUuid,
 } from "uuid";
 
+import type {
+  AgentEvent,
+} from "./agent/types.js";
+
 /**
  * Event categories that may be recorded in a Sky Code session log.
  *
  * Covers session lifecycle, conversation messages, tool results, compaction,
  * and background-task activity.
+ *
+ * "agent_event" is additive and deliberately separate from "message" and
+ * "tool_result": it carries one structured AgentEvent from the
+ * model/provider-independent agent loop (runAgentLoop() in agent/loop.ts),
+ * for a complete audit trail of a turn's actual tool activity. It is never
+ * replayed into conversation history on resume - reconstructSessionMessages()
+ * (session-resume.ts) only reacts to "message", "tool_result", and
+ * "compaction" record types, and silently skips any other type by
+ * construction, so an "agent_event" record is invisible to it. This keeps
+ * old session logs (with no "agent_event" records at all) and new ones (which
+ * have them, alongside ordinary "message" records for the user's goal and the
+ * assistant's final answer) both replaying correctly with no changes to that
+ * function.
  */
 export type SessionEventType =
   | "session_start"
@@ -38,7 +55,8 @@ export type SessionEventType =
   | "tool_result"
   | "compaction"
   | "session_end"
-  | "background_task";
+  | "background_task"
+  | "agent_event";
 
 /**
  * Conversation role associated with message-oriented session records.
@@ -156,6 +174,17 @@ export interface SessionRecord {
 
   summary?:
     string;
+
+  /**
+   * The structured payload for an "agent_event" record: one event exactly as
+   * runAgentLoop() recorded it (a requested tool call, a call-state change, a
+   * real tool result, a final answer, or a protocol condition - see
+   * AgentEvent in agent/types.ts). Present only on "agent_event" records;
+   * never read by reconstructSessionMessages() (see SessionEventType's doc
+   * comment above).
+   */
+  agentEvent?:
+    AgentEvent;
 }
 
 /**

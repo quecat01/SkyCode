@@ -106,15 +106,30 @@ import {
  * Creates a successful ToolExecutionResult containing the supplied output.
  *
  * @param {string} output - Result text returned to the model and session log.
+ * @param {boolean} [verified] - Pass true only when this handler itself
+ * performed a genuine independent post-condition check that already
+ * succeeded by the time this is called (see ToolExecutionResult.verified in
+ * tools.ts). Omitted or false by default: most handlers have no such check
+ * and must never claim one.
  * @returns {ToolExecutionResult} Standard successful tool result.
  */
 function succeeded(
   output: string,
+  verified?: boolean,
 ): ToolExecutionResult {
-  return {
+  const result: ToolExecutionResult = {
     success: true,
     output,
   };
+
+  // Only set the field at all when a caller actually claims verification:
+  // an omitted field, not an explicit false, is ToolExecutionResult's own
+  // "not verified" representation (see its doc comment in tools.ts).
+  if (verified) {
+    result.verified = true;
+  }
+
+  return result;
 }
 
 /**
@@ -504,8 +519,15 @@ export function createPhase1ToolHandlers(
             args,
           );
 
+        // createDocxFile() only resolves after its own structural
+        // validation (re-opening the written file and checking its
+        // required internal parts; see validateDocxStructure() in
+        // docgen/docx.ts) has already passed, so reaching this line is
+        // itself the independent post-condition check verified: true
+        // reports.
         return succeeded(
           `Created DOCX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+          true,
         );
       } catch (error) {
         return failed(
@@ -568,8 +590,13 @@ export function createPhase1ToolHandlers(
             args,
           );
 
+        // createXlsxFile() only resolves after its own structural
+        // validation has already passed (see its validate step in
+        // docgen/xlsx.ts), so reaching this line is itself the independent
+        // post-condition check verified: true reports.
         return succeeded(
           `Created XLSX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+          true,
         );
       } catch (error) {
         return failed(
@@ -632,8 +659,13 @@ export function createPhase1ToolHandlers(
             args,
           );
 
+        // createPdfFile() only resolves after its own structural
+        // validation (validatePdfStructure(); see docgen/pdf.ts) has
+        // already passed, so reaching this line is itself the independent
+        // post-condition check verified: true reports.
         return succeeded(
           `Created PDF file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+          true,
         );
       } catch (error) {
         return failed(
@@ -696,8 +728,13 @@ export function createPhase1ToolHandlers(
             args,
           );
 
+        // createPptxFile() only resolves after its own structural
+        // validation has already passed (see its validate step in
+        // docgen/pptx.ts), so reaching this line is itself the independent
+        // post-condition check verified: true reports.
         return succeeded(
           `Created PPTX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+          true,
         );
       } catch (error) {
         return failed(

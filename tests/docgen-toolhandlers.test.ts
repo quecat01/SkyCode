@@ -579,5 +579,225 @@ describe(
         );
       },
     );
+
+    describe(
+      "verified result plumbing",
+      () => {
+        it(
+          "reports verified: true for a successful create_docx, since it only resolves after its own structural validation passes",
+          async () => {
+            activeMode =
+              "bypass";
+
+            const handlers =
+              createHandlers();
+
+            const result =
+              await handlers.create_docx(
+                {
+                  path:
+                    "verified.docx",
+                  content:
+                    "# Title",
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              true,
+            );
+
+            expect(
+              result.verified,
+            ).toBe(
+              true,
+            );
+          },
+        );
+
+        it(
+          "reports verified: true for a successful create_xlsx",
+          async () => {
+            activeMode =
+              "bypass";
+
+            const handlers =
+              createHandlers();
+
+            const result =
+              await handlers.create_xlsx(
+                {
+                  path:
+                    "verified.xlsx",
+                  sheets: [
+                    {
+                      name:
+                        "Sheet1",
+                      rows: [
+                        [
+                          "a",
+                        ],
+                      ],
+                    },
+                  ],
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              true,
+            );
+
+            expect(
+              result.verified,
+            ).toBe(
+              true,
+            );
+          },
+        );
+
+        it(
+          "reports verified: true for a successful create_pdf",
+          async () => {
+            activeMode =
+              "bypass";
+
+            const handlers =
+              createHandlers();
+
+            const result =
+              await handlers.create_pdf(
+                {
+                  path:
+                    "verified.pdf",
+                  content:
+                    "# Title",
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              true,
+            );
+
+            expect(
+              result.verified,
+            ).toBe(
+              true,
+            );
+          },
+        );
+
+        it(
+          "reports verified: true for a successful create_pptx",
+          async () => {
+            activeMode =
+              "bypass";
+
+            const handlers =
+              createHandlers();
+
+            const result =
+              await handlers.create_pptx(
+                {
+                  path:
+                    "verified.pptx",
+                  slides: [
+                    {
+                      type:
+                        "title",
+                      title:
+                        "Title",
+                    },
+                  ],
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              true,
+            );
+
+            expect(
+              result.verified,
+            ).toBe(
+              true,
+            );
+          },
+        );
+
+        it(
+          "never reports verified: true for a failed create_docx (permission denied)",
+          async () => {
+            activeMode =
+              "default";
+
+            const handlers =
+              createHandlers(
+                false,
+              );
+
+            const result =
+              await handlers.create_docx(
+                {
+                  path:
+                    "denied.docx",
+                  content:
+                    "# Title",
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              false,
+            );
+
+            expect(
+              result.verified,
+            ).not.toBe(
+              true,
+            );
+          },
+        );
+
+        it(
+          "never reports verified: true for write_file, which performs no independent post-condition check",
+          async () => {
+            activeMode =
+              "bypass";
+
+            const handlers =
+              createHandlers();
+
+            const result =
+              await handlers.write_file(
+                {
+                  path:
+                    "plain.txt",
+                  content:
+                    "hello",
+                },
+              );
+
+            expect(
+              result.success,
+            ).toBe(
+              true,
+            );
+
+            expect(
+              result.verified,
+            ).not.toBe(
+              true,
+            );
+          },
+        );
+      },
+    );
   },
 );

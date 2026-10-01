@@ -42,26 +42,59 @@ describe(
     );
 
     it(
-      "loads sky.md content once and passes it to every system prompt call site",
+      "loads sky.md content once and passes it to every prompt-construction call site",
       async () => {
         const source =
           await readIndexSource();
 
-        const skyMdContentOccurrences =
-          source.split(
-            "skyMdContent",
-          ).length -
-          1;
+        const declarationOccurrences =
+          (
+            source.match(
+              /const skyMdContent =/g,
+            ) ??
+            []
+          ).length;
 
-        // One declaration (`const skyMdContent = await loadSkyMd();`) plus
-        // one usage per createSkyCodeSystemPrompt call site (initial
-        // generation, catalog-change regeneration, and /model regeneration -
-        // the identity block names the active engine, so switching models
-        // must also regenerate the prompt).
+        // Exactly one true source of truth: `const skyMdContent = await
+        // loadSkyMd();`.
         expect(
-          skyMdContentOccurrences,
+          declarationOccurrences,
         ).toBe(
-          4,
+          1,
+        );
+
+        // Every real call-site usage passes the bare identifier as its own
+        // trailing-comma argument line (this codebase's one-argument-per-line
+        // style). Matching that exact line shape - rather than counting every
+        // textual mention of the identifier - excludes both this test's own
+        // false positives (a JSDoc @param line, or a `skyMdContent: string,`
+        // parameter declaration) from the count, so it only breaks when a
+        // real call site is added or removed, not when a doc comment changes.
+        //
+        // Three regeneration points (startup, /model switch, catalog-skill
+        // change) each rebuild three things from skyMdContent: the legacy
+        // system prompt (createSkyCodeSystemPrompt), the active
+        // ToolCallStrategy (buildToolCallStrategy), and the
+        // FinalAnswerProducer (buildFinalAnswerProducer) - 3 x 3 = 9. Plus
+        // buildToolCallStrategy's own body passes it through twice (once on
+        // its native-strategy branch, once on its legacy-strategy branch) and
+        // buildFinalAnswerProducer's body passes it through once - 9 + 2 + 1
+        // = 12. This count should shrink back down once streamModelTurn and
+        // the old systemPrompt-only path are removed in a later cleanup step,
+        // since createSkyCodeSystemPrompt's own direct calls (3 of the 12)
+        // will go with them.
+        const callSiteOccurrences =
+          (
+            source.match(
+              /^\s*skyMdContent,\s*$/gm,
+            ) ??
+            []
+          ).length;
+
+        expect(
+          callSiteOccurrences,
+        ).toBe(
+          12,
         );
 
         expect(

@@ -142,6 +142,89 @@ describe(
     );
 
     it(
+      "ignores agent_event records entirely: the structured agent-loop audit trail never becomes model conversation history",
+      () => {
+        const messages =
+          reconstructSessionMessages([
+            createRecord({
+              role:
+                "user",
+
+              content:
+                "Add a LICENSE file.",
+            }),
+            createRecord({
+              type:
+                "agent_event",
+
+              agentEvent: {
+                type:
+                  "tool_requested",
+
+                callId:
+                  "call-1",
+
+                tool:
+                  "write_file",
+
+                arguments: {
+                  path:
+                    "LICENSE",
+                },
+              },
+            }),
+            createRecord({
+              type:
+                "agent_event",
+
+              agentEvent: {
+                type:
+                  "tool_result",
+
+                callId:
+                  "call-1",
+
+                success:
+                  true,
+
+                verified:
+                  false,
+
+                output:
+                  "Wrote LICENSE",
+              },
+            }),
+            createRecord({
+              role:
+                "assistant",
+
+              content:
+                "Added the LICENSE file.",
+            }),
+          ]);
+
+        expect(
+          messages,
+        ).toEqual([
+          {
+            role:
+              "user",
+
+            content:
+              "Add a LICENSE file.",
+          },
+          {
+            role:
+              "assistant",
+
+            content:
+              "Added the LICENSE file.",
+          },
+        ]);
+      },
+    );
+
+    it(
       "does not re-warn about a stored multi-block assistant message during resume reconstruction",
       () => {
         // Regression test: parseSkyToolRequest() is reused here purely to
@@ -530,6 +613,140 @@ describe(
 
             content:
               "Resume this request.",
+          },
+        ]);
+      },
+    );
+
+    it(
+      "round-trips agent_event records through a real session file without them reaching reconstructed messages",
+      async () => {
+        const logger =
+          await createSessionLogger(
+            sessionDirectory,
+          );
+
+        await logger.append({
+          type:
+            "session_start",
+
+          workingDirectory:
+            projectDirectory,
+
+          model:
+            "test-model",
+        });
+
+        await logger.append({
+          type:
+            "message",
+
+          role:
+            "user",
+
+          content:
+            "Add a LICENSE file.",
+
+          model:
+            "test-model",
+        });
+
+        await logger.append({
+          type:
+            "agent_event",
+
+          model:
+            "test-model",
+
+          agentEvent: {
+            type:
+              "tool_requested",
+
+            callId:
+              "call-1",
+
+            tool:
+              "write_file",
+
+            arguments: {
+              path:
+                "LICENSE",
+            },
+          },
+        });
+
+        await logger.append({
+          type:
+            "agent_event",
+
+          model:
+            "test-model",
+
+          agentEvent: {
+            type:
+              "tool_result",
+
+            callId:
+              "call-1",
+
+            success:
+              true,
+
+            verified:
+              false,
+
+            output:
+              "Wrote LICENSE",
+          },
+        });
+
+        await logger.append({
+          type:
+            "message",
+
+          role:
+            "assistant",
+
+          content:
+            "Added the LICENSE file.",
+
+          model:
+            "test-model",
+        });
+
+        const candidate =
+          await loadResumableSession(
+            logger.filePath,
+          );
+
+        // Every record is preserved on disk, including the two structured
+        // agent_event entries...
+        expect(
+          candidate
+            ?.recordCount,
+        ).toBe(
+          5,
+        );
+
+        // ...but only the ordinary "message" records feed the reconstructed
+        // conversation the model actually sees on resume.
+        expect(
+          candidate
+            ?.messages,
+        ).toEqual([
+          {
+            role:
+              "user",
+
+            content:
+              "Add a LICENSE file.",
+          },
+          {
+            role:
+              "assistant",
+
+            content:
+              "Added the LICENSE file.",
           },
         ]);
       },

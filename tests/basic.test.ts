@@ -38,6 +38,7 @@ import {
 } from "../src/permissions.ts";
 
 import {
+  analyzeSkyToolResponse,
   createSkyCodeSystemPrompt,
   executeSkyToolRequest,
   getExampleSkyToolInvocation,
@@ -496,6 +497,228 @@ describe(
         expect(prompt).toContain(
           '"tool":"mcp_call"',
         );
+      },
+    );
+  },
+);
+
+describe(
+  "Sky Code sky-tool response analysis (analyzeSkyToolResponse)",
+  () => {
+    it(
+      'classifies a normal assistant response as "none"',
+      () => {
+        expect(
+          analyzeSkyToolResponse(
+            "This is a normal assistant response.",
+          ),
+        ).toEqual({
+          kind: "none",
+        });
+      },
+    );
+
+    it(
+      'classifies exactly one valid sky-tool block as "single"',
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+          "```",
+        ].join("\n");
+
+        expect(
+          analyzeSkyToolResponse(
+            response,
+          ),
+        ).toEqual({
+          kind: "single",
+          request: {
+            tool:
+              "read_file",
+            args: {
+              path:
+                "/tmp/first.txt",
+            },
+          },
+        });
+      },
+    );
+
+    it(
+      'classifies two valid sky-tool blocks as "multiple", without writing a console warning itself',
+      () => {
+        const warningSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        try {
+          const response = [
+            "```sky-tool",
+            '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+            "```",
+            "```sky-tool",
+            '{"tool":"run_shell_command","args":{"command":"pwd"}}',
+            "```",
+          ].join("\n");
+
+          expect(
+            analyzeSkyToolResponse(
+              response,
+            ),
+          ).toEqual({
+            kind: "multiple",
+            count: 2,
+            leading: {
+              tool:
+                "read_file",
+              args: {
+                path:
+                  "/tmp/first.txt",
+              },
+            },
+          });
+
+          expect(
+            warningSpy,
+          ).not.toHaveBeenCalled();
+        } finally {
+          warningSpy.mockRestore();
+        }
+      },
+    );
+
+    it(
+      'classifies a malformed leading block as "malformed", carrying the original error unchanged',
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"not_a_real_tool","args":{}}',
+          "```",
+        ].join("\n");
+
+        const outcome =
+          analyzeSkyToolResponse(
+            response,
+          );
+
+        expect(
+          outcome.kind,
+        ).toBe(
+          "malformed",
+        );
+
+        if (outcome.kind === "malformed") {
+          expect(
+            outcome.error,
+          ).toBeInstanceOf(
+            Error,
+          );
+
+          expect(
+            (outcome.error as Error).message,
+          ).toContain(
+            "Unknown Sky Code tool",
+          );
+        }
+      },
+    );
+
+    it(
+      'does not count a malformed later block toward a "multiple" outcome, matching parseSkyToolRequest\'s own behavior',
+      () => {
+        const response = [
+          "```sky-tool",
+          '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+          "```",
+          "```sky-tool",
+          '{"tool":"run_shell_command","args":',
+          "```",
+          "```sky-tool",
+          '{"tool":"write_file","args":{"path":"/tmp/incomplete.txt","content":"unfinished"}}',
+        ].join("\n");
+
+        expect(
+          analyzeSkyToolResponse(
+            response,
+          ),
+        ).toEqual({
+          kind: "single",
+          request: {
+            tool:
+              "read_file",
+            args: {
+              path:
+                "/tmp/first.txt",
+            },
+          },
+        });
+      },
+    );
+
+    it(
+      "agrees with parseSkyToolRequest's own leading-request result for every outcome that produces one",
+      () => {
+        const singleBlockResponse = [
+          "```sky-tool",
+          '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+          "```",
+        ].join("\n");
+
+        const multiBlockResponse = [
+          "```sky-tool",
+          '{"tool":"read_file","args":{"path":"/tmp/first.txt"}}',
+          "```",
+          "```sky-tool",
+          '{"tool":"run_shell_command","args":{"command":"pwd"}}',
+          "```",
+        ].join("\n");
+
+        const warningSpy =
+          vi.spyOn(
+            console,
+            "warn",
+          ).mockImplementation(
+            () => undefined,
+          );
+
+        try {
+          const singleOutcome =
+            analyzeSkyToolResponse(
+              singleBlockResponse,
+            );
+
+          const multipleOutcome =
+            analyzeSkyToolResponse(
+              multiBlockResponse,
+            );
+
+          expect(
+            singleOutcome.kind === "single"
+              ? singleOutcome.request
+              : undefined,
+          ).toEqual(
+            parseSkyToolRequest(
+              singleBlockResponse,
+            ),
+          );
+
+          expect(
+            multipleOutcome.kind === "multiple"
+              ? multipleOutcome.leading
+              : undefined,
+          ).toEqual(
+            parseSkyToolRequest(
+              multiBlockResponse,
+            ),
+          );
+        } finally {
+          warningSpy.mockRestore();
+        }
       },
     );
   },

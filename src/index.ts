@@ -41,7 +41,58 @@ import {
 } from "node:url";
 
 import {
+  createLiteLLMNativeCompletionClient,
+  createLiteLLMTextCompletionClient,
+} from "./agent/adapters/litellm-client.js";
+
+import {
+  createFinalAnswerProducer,
+} from "./agent/adapters/final-answer-producer.js";
+
+import {
+  createLiveToolExecutor,
+} from "./agent/adapters/tool-executor.js";
+
+import {
+  runAgentLoop,
+} from "./agent/loop.js";
+
+import type {
+  NativeCompletionClient,
+  PlainConversationTurn,
+  TextCompletionClient,
+} from "./agent/model-client.js";
+
+import {
+  LegacyStrategy,
+} from "./agent/strategies/legacy.js";
+
+import {
+  NativeStrategy,
+} from "./agent/strategies/native.js";
+
+import {
+  PromptedStrategy,
+} from "./agent/strategies/prompted.js";
+
+import {
+  resolveStrategyKind,
+} from "./agent/strategy-selection.js";
+
+import {
+  BUILTIN_TOOL_DEFINITIONS,
+} from "./agent/tool-schema.js";
+
+import type {
+  FinalAnswerProducer,
+  ToolCallStrategy,
+  ToolDefinition,
+  ToolExecutor,
+} from "./agent/types.js";
+
+import {
   mergePluginAgents,
+  type ActiveSubAgentDefinition,
 } from "./agents.js";
 
 import {
@@ -85,6 +136,7 @@ import {
 
 import {
   loadCatalog,
+  type CatalogSkill,
 } from "./catalog.js";
 
 import {
@@ -109,6 +161,11 @@ import {
 import {
   createSkyCodeMarkdownStreamer,
 } from "./markdown-render.js";
+
+import {
+  SkyToolMarkerBuffer,
+  type SkyToolMarkerClassification,
+} from "./sky-tool-marker-buffer.js";
 
 import {
   formatCliErrorReport,
@@ -138,6 +195,7 @@ import {
   mergePluginMcpServers,
   mergePluginSkills,
   resolvePluginSkillCommand,
+  type ActivePluginSkill,
 } from "./plugins.js";
 
 import {
@@ -178,6 +236,8 @@ import {
 } from "./toolhandlers.js";
 
 import {
+  createSkyCodeCapabilitiesPrompt,
+  createSkyCodeFinalAnswerPrompt,
   createSkyCodeSystemPrompt,
   getExampleSkyToolInvocation,
   parseSkyToolRequest,
@@ -697,6 +757,267 @@ function createValidationErrorFeedbackMessage(
   );
 
   return lines.join("\n");
+}
+
+/**
+ * Builds a TextCompletionClient (agent/model-client.ts) whose completions
+ * stream live to the terminal, for use by the model/provider-independent
+ * agent loop's LegacyStrategy and FinalAnswerProducer (agent/loop.ts and
+ * agent/adapters/final-answer-producer.ts).
+ *
+ * Not yet wired into the live turn loop below: completeConversationTurn()
+ * still uses the pre-existing systemPrompt-driven path further down until
+ * that function's body is replaced by a separate, later change. This client
+ * (and the strategy/producer construction that uses it) is built here first
+ * so that step is a pure call-site swap, with construction already verified
+ * against real config/model/session state.
+ *
+ * Displays exactly the way streamModelTurn() below always has: a sky-tool
+ * fenced block is withheld from the terminal (see SkyToolMarkerBuffer,
+ * sky-tool-marker-buffer.ts, which is that same marker-detection logic
+ * extracted so it has direct unit test coverage) while ordinary
+ * conversational text streams through the shared markdown renderer as it
+ * arrives. A fresh marker buffer, markdown streamer, and thinking indicator
+ * are created per completion, since none of their buffering state has
+ * meaning across separate calls - mirroring streamModelTurn()'s own
+ * per-call lifetime for the same state.
+ *
+ * @param {AppConfig} config - Validated Sky Code API configuration.
+ * @returns {TextCompletionClient} A client backed by the real LiteLLM
+ * endpoint (see createLiteLLMTextCompletionClient(),
+ * agent/adapters/litellm-client.ts) whose output streams live to the
+ * terminal as it arrives.
+ */
+function createVisibleTextCompletionClient(
+  config: AppConfig,
+): TextCompletionClient {
+  return {
+    async complete(
+      model,
+      systemPrompt,
+      turns,
+      options,
+    ) {
+      const markerBuffer =
+        new SkyToolMarkerBuffer();
+
+      const markdownStreamer =
+        createSkyCodeMarkdownStreamer();
+
+      const stopThinkingIndicator =
+        startThinkingIndicator();
+
+      const displayClassification = (
+        classification: SkyToolMarkerClassification,
+      ): void => {
+        if (
+          classification.mode ===
+            "normal" &&
+          classification.textToDisplay !==
+            ""
+        ) {
+          output.write(
+            markdownStreamer.push(
+              classification.textToDisplay,
+            ),
+          );
+        }
+      };
+
+      try {
+        const response =
+          await createLiteLLMTextCompletionClient(
+            config,
+            (content) => {
+              // The first chunk of any kind means the model has begun
+              // responding, so the "thinking" wait is over regardless of
+              // whether this turn ends up being displayed text or a hidden
+              // sky-tool block.
+              stopThinkingIndicator();
+
+              displayClassification(
+                markerBuffer.push(
+                  content,
+                ),
+              );
+            },
+          ).complete(
+            model,
+            systemPrompt,
+            turns,
+            options,
+          );
+
+        // A short response may end before streaming supplied enough
+        // characters for push() to resolve the normal/tool decision on its
+        // own.
+        const finalClassification =
+          markerBuffer.finish();
+
+        displayClassification(
+          finalClassification,
+        );
+
+        // Flushes any content the streamer is still holding back for
+        // context (an open code fence or table at the very end of the
+        // response). Only meaningful when this turn's own text was
+        // actually pushed through the streamer above; a tool-block turn
+        // never fed it anything.
+        if (
+          finalClassification.mode ===
+          "normal"
+        ) {
+          output.write(
+            markdownStreamer.finish(),
+          );
+        }
+
+        return response;
+      } finally {
+        // Guards against a completely empty response (the callback above
+        // never ran) and against the request throwing before any content
+        // arrived; stopThinkingIndicator() is itself safe to call more than
+        // once.
+        stopThinkingIndicator();
+      }
+    },
+  };
+}
+
+/**
+ * Resolves the ToolCallStrategy the currently active model should use
+ * (resolveStrategyKind(), agent/strategy-selection.ts), constructed with the
+ * matching strategy-aware system prompt (tools.ts) and completion client.
+ *
+ * Called once at startup and again at every point that already regenerates
+ * systemPrompt (a /model switch, or a catalog-skill change), so the strategy
+ * and its prompt never drift out of sync with the session's actual runtime
+ * capabilities or active model.
+ *
+ * @param {string} activeModel - Model identifier currently active for this
+ * session.
+ * @param {TextCompletionClient} visibleTextClient - Streams live to the
+ * terminal; used for LegacyStrategy (see createVisibleTextCompletionClient()
+ * above).
+ * @param {TextCompletionClient} silentTextClient - Never streams to the
+ * terminal; used for PromptedStrategy, whose completions are narrow JSON
+ * selections the user should never see.
+ * @param {NativeCompletionClient} nativeClient - Used for NativeStrategy.
+ * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for
+ * the current session.
+ * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills
+ * supplied by loaded plugins.
+ * @param {readonly ActiveSubAgentDefinition[]} subAgents - Active sub-agents
+ * available for delegated tasks.
+ * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
+ * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`.
+ * @returns {ToolCallStrategy} The strategy this session should use right
+ * now.
+ */
+function buildToolCallStrategy(
+  activeModel: string,
+  visibleTextClient: TextCompletionClient,
+  silentTextClient: TextCompletionClient,
+  nativeClient: NativeCompletionClient,
+  mcpTools: readonly McpToolDefinition[],
+  pluginSkills: readonly ActivePluginSkill[],
+  subAgents: readonly ActiveSubAgentDefinition[],
+  catalogSkills: readonly CatalogSkill[],
+  skyMdContent: string,
+): ToolCallStrategy {
+  const strategyKind =
+    resolveStrategyKind(
+      activeModel,
+    );
+
+  if (
+    strategyKind ===
+    "native"
+  ) {
+    return new NativeStrategy(
+      nativeClient,
+      createSkyCodeCapabilitiesPrompt(
+        mcpTools,
+        pluginSkills,
+        subAgents,
+        catalogSkills,
+        skyMdContent,
+        activeModel,
+      ),
+    );
+  }
+
+  if (
+    strategyKind ===
+    "prompted"
+  ) {
+    return new PromptedStrategy(
+      silentTextClient,
+    );
+  }
+
+  return new LegacyStrategy(
+    visibleTextClient,
+    createSkyCodeSystemPrompt(
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      catalogSkills,
+      skyMdContent,
+      activeModel,
+    ),
+  );
+}
+
+/**
+ * Builds the FinalAnswerProducer the currently active model should use.
+ *
+ * Used the same way regardless of which ToolCallStrategy is active this turn
+ * (see FinalAnswerProducer's own doc comment in agent/types.ts): reached
+ * only from a strategy's "done" action today (PromptedStrategy's case), but
+ * not tied to it structurally, so it is built alongside the strategy at the
+ * same refresh points rather than only when PromptedStrategy is active.
+ *
+ * @param {string} activeModel - Model identifier currently active for this
+ * session.
+ * @param {TextCompletionClient} visibleTextClient - Streams live to the
+ * terminal, since a produced final answer is always shown to the user.
+ * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for
+ * the current session.
+ * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills
+ * supplied by loaded plugins.
+ * @param {readonly ActiveSubAgentDefinition[]} subAgents - Active sub-agents
+ * available for delegated tasks.
+ * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
+ * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`.
+ * @returns {FinalAnswerProducer} The producer this session should use right
+ * now.
+ */
+function buildFinalAnswerProducer(
+  activeModel: string,
+  visibleTextClient: TextCompletionClient,
+  mcpTools: readonly McpToolDefinition[],
+  pluginSkills: readonly ActivePluginSkill[],
+  subAgents: readonly ActiveSubAgentDefinition[],
+  catalogSkills: readonly CatalogSkill[],
+  skyMdContent: string,
+): FinalAnswerProducer {
+  return createFinalAnswerProducer(
+    visibleTextClient,
+    createSkyCodeFinalAnswerPrompt(
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      catalogSkills,
+      skyMdContent,
+      activeModel,
+    ),
+    activeModel,
+  );
 }
 
 /**
@@ -1248,17 +1569,272 @@ async function compactCurrentContext(
 }
 
 /**
- * Completes one user conversation turn, including any model-request/tool-result
- * cycles required before the model produces its final ordinary response.
+ * Completes one user conversation turn using Sky Code's model/provider-
+ * independent agent loop (runAgentLoop(), agent/loop.ts): asks the active
+ * ToolCallStrategy for the next action, executes any requested tool for
+ * real, and repeats until a final answer is produced or a background tool
+ * ends the turn early (see AgentTurnOutcome, agent/types.ts).
  *
- * Each assistant response is logged and appended to conversation context. If
- * it contains a Sky Code tool request, readline is paused while the tool runs,
- * hooks are applied, the result is logged, and a synthetic tool-result message
- * is added so the model can continue the same turn.
+ * completeConversationTurn() itself owns only what is specific to Sky
+ * Code's live CLI conversation:
+ * - deriving this turn's goal/priorTurns from the live `messages` array;
+ * - mirroring every recorded AgentEvent into the session log as an
+ *   "agent_event" record, and into the terminal as the same per-round
+ *   "Tool completed"/"Tool failed" status lines the pre-existing path
+ *   always printed;
+ * - appending the turn's own concluding assistant message to both
+ *   `messages` and the session log, in the form appropriate to how the
+ *   turn actually ended (see the two AgentTurnOutcome branches below);
+ * - collecting every session-log write spawned above and awaiting all of
+ *   them, even when the turn ends by throwing, before returning, so a fast
+ *   process exit can never lose an execution event.
  *
- * Background-tool results may intentionally return control to the prompt
- * immediately. Otherwise model/tool cycling continues until a normal response
- * is produced or MAX_TOOL_ROUNDS is reached.
+ * A background-tool result that ends the turn early (`return_to_prompt`)
+ * is recorded as a plain assistant message using the tool's own real,
+ * already-recorded output text verbatim - never as a model-produced
+ * `final_answer` event, and never rephrased or embellished with a further
+ * model call. This keeps conversation/session history structurally
+ * coherent (`user request -> actual background-task acknowledgement`)
+ * while the structured agent_event log already preserves the true
+ * execution provenance.
+ *
+ * @param {string} activeModel - Model used for this conversation turn.
+ * @param {ChatMessage[]} messages - Mutable conversation history. The
+ * current user turn must already be its last entry (see runCli()'s call
+ * site, which always pushes it immediately before calling this function).
+ * @param {SessionLogger} sessionLogger - Current append-only session
+ * logger.
+ * @param {ToolCallStrategy} strategy - The active strategy for
+ * `activeModel` (see resolveStrategyKind(), agent/strategy-selection.ts,
+ * and buildToolCallStrategy() above).
+ * @param {ToolDefinition[]} tools - Canonical definitions of every tool
+ * available this turn (see BUILTIN_TOOL_DEFINITIONS, agent/tool-schema.ts).
+ * @param {ToolExecutor} executor - Executes a requested tool call for real
+ * (see createLiveToolExecutor(), agent/adapters/tool-executor.ts); already
+ * owns readline pause/resume and permission handling for each call.
+ * @param {FinalAnswerProducer} finalAnswerProducer - Produces the
+ * user-facing reply when the active strategy signals "done" without
+ * itself writing that text (see buildFinalAnswerProducer() above).
+ * @returns {Promise<void>} Resolves once control should return to the user.
+ * @throws {Error} If a model request, tool execution, or session logging
+ * fails, or the turn exceeds the agent loop's own step bound (see
+ * MAX_AGENT_STEPS, agent/loop.ts) without reaching a final answer.
+ *
+ * Side effects: performs model requests, executes tools, mutates
+ * conversation history, writes session records, and writes response/tool
+ * status text to the terminal.
+ */
+export async function completeConversationTurn(
+  activeModel: string,
+  messages: ChatMessage[],
+  sessionLogger: SessionLogger,
+  strategy: ToolCallStrategy,
+  tools: ToolDefinition[],
+  executor: ToolExecutor,
+  finalAnswerProducer: FinalAnswerProducer,
+): Promise<void> {
+  const currentTurn =
+    messages.at(-1);
+
+  if (
+    !currentTurn ||
+    currentTurn.role !==
+      "user"
+  ) {
+    throw new Error(
+      "completeConversationTurn() requires the current user message to already be the last entry in messages.",
+    );
+  }
+
+  const goal =
+    currentTurn.content;
+
+  const priorTurns: PlainConversationTurn[] =
+    messages.slice(
+      0,
+      -1,
+    );
+
+  // Every session_logger.append() promise spawned while this turn runs -
+  // one per recorded AgentEvent, plus this turn's own concluding assistant
+  // message - is collected here and awaited together before this function
+  // returns, even when the turn ends by throwing (see the finally block
+  // below). SessionLogger.append() already serializes writes onto one
+  // queue in call order (see session.ts), so on-disk ordering is safe
+  // regardless of whether an individual call is awaited; collecting and
+  // awaiting these guards against losing a still-pending write on a fast
+  // process exit, not against reordering.
+  const pendingLogWrites: Promise<void>[] =
+    [];
+
+  // tool_result events carry only a callId (see AgentEvent, agent/types.ts);
+  // this recovers the tool name for the terminal's per-round status line,
+  // mirroring the pre-existing path's "Tool completed: <name>" message.
+  const toolNamesByCallId =
+    new Map<string, string>();
+
+  try {
+    const outcome =
+      await runAgentLoop(
+        goal,
+        priorTurns,
+        strategy,
+        tools,
+        activeModel,
+        executor,
+        finalAnswerProducer,
+        (event) => {
+          pendingLogWrites.push(
+            sessionLogger.append({
+              type: "agent_event",
+              agentEvent: event,
+              model: activeModel,
+            }),
+          );
+
+          if (event.type === "tool_requested") {
+            toolNamesByCallId.set(
+              event.callId,
+              event.tool,
+            );
+
+            return;
+          }
+
+          if (event.type === "tool_result") {
+            const toolName =
+              toolNamesByCallId.get(
+                event.callId,
+              ) ??
+              "tool";
+
+            console.log(
+              event.success
+                ? `Tool completed: ${toolName}`
+                : `Tool failed: ${toolName}`,
+            );
+
+            if (!event.success) {
+              console.log(
+                event.output,
+              );
+            }
+          }
+        },
+      );
+
+    if (outcome.kind === "final_answer") {
+      messages.push({
+        role: "assistant",
+        content:
+          outcome.text,
+      });
+
+      pendingLogWrites.push(
+        sessionLogger.append({
+          type: "message",
+          role: "assistant",
+          content:
+            outcome.text,
+          model:
+            activeModel,
+        }),
+      );
+
+      // outcome.alreadyDisplayed (see AgentTurnOutcome, agent/types.ts) is
+      // the strategy-independent signal for whether this text has already
+      // been shown to the user: LegacyStrategy and FinalAnswerProducer both
+      // use the visible client (createVisibleTextCompletionClient() above)
+      // and stream it live as it arrives, so this branch never rewrites
+      // their text - only the trailing spacing (or the empty-response
+      // notice) streamModelTurn's caller always added after a response
+      // finished streaming is still needed. NativeStrategy's completion
+      // client (createLiteLLMNativeCompletionClient()) is deliberately kept
+      // non-streaming, so its text reaches here with alreadyDisplayed:
+      // false and is rendered once, through the same Markdown rendering
+      // system a streamed response uses (see createSkyCodeMarkdownStreamer,
+      // markdown-render.ts) - never twice, and never as raw unrendered text.
+      if (
+        outcome.text.trim() ===
+        ""
+      ) {
+        output.write(
+          "(The model returned an empty response.)\n\n",
+        );
+      } else if (
+        outcome.alreadyDisplayed
+      ) {
+        output.write(
+          "\n\n",
+        );
+      } else {
+        const markdownStreamer =
+          createSkyCodeMarkdownStreamer();
+
+        output.write(
+          markdownStreamer.push(
+            outcome.text,
+          ),
+        );
+
+        output.write(
+          markdownStreamer.finish(),
+        );
+
+        output.write(
+          "\n\n",
+        );
+      }
+
+      return;
+    }
+
+    // outcome.kind === "return_to_prompt": a background tool's own real,
+    // already-recorded output is the conversational acknowledgement for
+    // this turn (see AgentTurnOutcome, agent/types.ts) - never a
+    // model-produced final answer, and never rephrased or embellished with
+    // a further model call.
+    messages.push({
+      role: "assistant",
+      content:
+        outcome.result.output,
+    });
+
+    pendingLogWrites.push(
+      sessionLogger.append({
+        type: "message",
+        role: "assistant",
+        content:
+          outcome.result.output,
+        model:
+          activeModel,
+      }),
+    );
+
+    console.log(
+      outcome.result.output,
+    );
+
+    console.log();
+  } finally {
+    await Promise.all(
+      pendingLogWrites,
+    );
+  }
+}
+
+/**
+ * Retained, currently unused: the pre-existing sky-tool fenced-block
+ * conversation loop completeConversationTurn() ran before the live agent-loop
+ * wiring above replaced it. Kept verbatim, alongside streamModelTurn() and
+ * its supporting parser/executor/retry code, per the same "prove the new
+ * path first, delete dead code as a separate cleanup step" plan already
+ * applied to that earlier construction step - not called from anywhere in
+ * the live path. tests/validation-retry-live.test.ts still exercises this
+ * exact code shape via source inspection (the *-live.test.ts convention used
+ * throughout this file), so its assertions are the reason this is preserved
+ * rather than deleted outright; they will be revisited in the same later
+ * cleanup step that removes streamModelTurn.
  *
  * @param {AppConfig} config - Active application/API configuration.
  * @param {string} activeModel - Model used for this conversation turn.
@@ -1277,7 +1853,7 @@ async function compactCurrentContext(
  * conversation history, pauses/resumes readline, writes session records, and
  * writes response/tool status text to the terminal.
  */
-async function completeConversationTurn(
+async function legacyCompleteConversationTurn(
   config: AppConfig,
   activeModel: string,
   messages: ChatMessage[],
@@ -1954,6 +2530,71 @@ export async function runCli():
     output,
   );
 
+  // Model/provider-independent agent-loop wiring (agent/loop.ts and
+  // related), consumed by completeConversationTurn() below via
+  // strategy/tools/executor/finalAnswerProducer. Built here, alongside the
+  // existing systemPrompt (still generated for now - see streamModelTurn's
+  // own doc comment below, retained temporarily as dead code pending a
+  // later cleanup step), so construction is verified against real startup
+  // state.
+  // A fresh shallow copy: BUILTIN_TOOL_DEFINITIONS itself is declared
+  // `readonly ToolDefinition[]` (agent/tool-schema.ts, never mutated at its
+  // source), while ToolCallStrategy.getNextAction() and runAgentLoop()
+  // (agent/types.ts, agent/loop.ts) both take the mutable `ToolDefinition[]`
+  // shape; neither actually mutates it, so this copy exists only to satisfy
+  // that type shape at the boundary between the two.
+  const tools: ToolDefinition[] =
+    [
+      ...BUILTIN_TOOL_DEFINITIONS,
+    ];
+
+  const executor =
+    createLiveToolExecutor(
+      handlers,
+      hookRegistry,
+      readline,
+      input,
+    );
+
+  const visibleTextClient =
+    createVisibleTextCompletionClient(
+      config,
+    );
+
+  const silentTextClient =
+    createLiteLLMTextCompletionClient(
+      config,
+    );
+
+  const nativeClient =
+    createLiteLLMNativeCompletionClient(
+      config,
+    );
+
+  let strategy: ToolCallStrategy =
+    buildToolCallStrategy(
+      activeModel,
+      visibleTextClient,
+      silentTextClient,
+      nativeClient,
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      activeCatalogSkills,
+      skyMdContent,
+    );
+
+  let finalAnswerProducer: FinalAnswerProducer =
+    buildFinalAnswerProducer(
+      activeModel,
+      visibleTextClient,
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      activeCatalogSkills,
+      skyMdContent,
+    );
+
   let resumableSession:
     ResumableSession | null =
     null;
@@ -2473,6 +3114,33 @@ export async function runCli():
             activeModel,
           );
 
+        // A model switch may also change which tool-calling strategy this
+        // session uses (resolveStrategyKind() is keyed by model), so both
+        // are rebuilt alongside systemPrompt above.
+        strategy =
+          buildToolCallStrategy(
+            activeModel,
+            visibleTextClient,
+            silentTextClient,
+            nativeClient,
+            mcpTools,
+            pluginSkills,
+            subAgents,
+            activeCatalogSkills,
+            skyMdContent,
+          );
+
+        finalAnswerProducer =
+          buildFinalAnswerProducer(
+            activeModel,
+            visibleTextClient,
+            mcpTools,
+            pluginSkills,
+            subAgents,
+            activeCatalogSkills,
+            skyMdContent,
+          );
+
         continue;
       }
 
@@ -2638,6 +3306,33 @@ export async function runCli():
               activeCatalogSkills,
               skyMdContent,
               activeModel,
+            );
+
+          // The active strategy's own prompt embeds the same catalog-skill
+          // listing, so it (and the final-answer prompt, built from the same
+          // capabilities) must be rebuilt alongside systemPrompt above.
+          strategy =
+            buildToolCallStrategy(
+              activeModel,
+              visibleTextClient,
+              silentTextClient,
+              nativeClient,
+              mcpTools,
+              pluginSkills,
+              subAgents,
+              activeCatalogSkills,
+              skyMdContent,
+            );
+
+          finalAnswerProducer =
+            buildFinalAnswerProducer(
+              activeModel,
+              visibleTextClient,
+              mcpTools,
+              pluginSkills,
+              subAgents,
+              activeCatalogSkills,
+              skyMdContent,
             );
 
           console.log(
@@ -2811,14 +3506,13 @@ export async function runCli():
 
       try {
         await completeConversationTurn(
-          config,
           activeModel,
           messages,
-          readline,
           sessionLogger,
-          handlers,
-          hookRegistry,
-          systemPrompt,
+          strategy,
+          tools,
+          executor,
+          finalAnswerProducer,
         );
       } catch (error) {
         output.write(

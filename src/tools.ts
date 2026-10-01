@@ -617,13 +617,18 @@ function formatMcpToolLines(
 }
 
 /**
- * Builds the complete system prompt that defines Sky Code's tool-using
- * behavior for the model.
+ * Builds the shared, strategy-independent "capabilities" lines every Sky Code
+ * system prompt is built from: identity intro, local tool descriptions,
+ * document-tool guidance, web guidance, and the dynamically discovered MCP
+ * tools, sub-agents, plugin skills, and catalog skills.
  *
- * The static local-tool instructions are combined with capabilities discovered
- * at runtime: connected MCP tools, configured sub-agents, plugin skills, and
- * enabled catalog skills. The prompt also defines the strict `sky-tool` fenced
- * block protocol used by parseSkyToolRequest().
+ * Deliberately excludes both the `sky-tool` fenced-block protocol block and
+ * the trailing identity/engine block, so every caller (the legacy full
+ * prompt, NativeStrategy's capabilities prompt, and the final-answer prompt)
+ * assembles those two pieces itself - see SKY_TOOL_PROTOCOL_LINES and
+ * buildSkyCodeIdentityLines() below. Keeping this content in one place is
+ * what keeps the three strategies from drifting apart on what Sky Code can
+ * do, even though only Legacy also gets the protocol block.
  *
  * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
  * current session.
@@ -633,40 +638,19 @@ function formatMcpToolLines(
  * available for delegated tasks.
  * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
  * available to the current session.
- * @param {string} skyMdContent - Optional user-authored operating rules read
- * from `~/.sky-code/sky.md`. Deliberately appended after everything else
- * (rather than woven in near the top) so it sits closest to generation,
- * which helps smaller/less-capable models retain it via recency weighting.
- * @param {string} activeModel - Name of the language model currently serving
- * this session, as configured through LiteLLM. Used only to let the model
- * answer honestly if asked what it is running on; an empty string omits the
- * specific name while still stating that a model is its engine, not its
- * identity. For the same recency reason as skyMdContent, the identity block
- * this produces is placed near the end of the prompt rather than the top.
- * @returns {string} Complete newline-delimited system prompt sent to the model.
+ * @returns {string[]} Prompt lines, with no leading or trailing blank line.
  */
-export function createSkyCodeSystemPrompt(
+function buildSkyCodeCapabilitiesLines(
   mcpTools:
-    readonly McpToolDefinition[] = [],
+    readonly McpToolDefinition[],
   pluginSkills:
-    readonly ActivePluginSkill[] = [],
+    readonly ActivePluginSkill[],
   subAgents:
-    readonly ActiveSubAgentDefinition[] = [],
+    readonly ActiveSubAgentDefinition[],
   catalogSkills:
-    readonly CatalogSkill[] = [],
-  skyMdContent:
-    string = "",
-  activeModel:
-    string = "",
-): string {
-  const trimmedActiveModel =
-    activeModel.trim();
-
-  const engineLine =
-    trimmedActiveModel.length > 0
-      ? `- Right now that engine is "${trimmedActiveModel}", reached through a LiteLLM proxy. Like a brain, it is swappable and it is not who you are.`
-      : "- That engine is swappable, reached through a LiteLLM proxy. Like a brain, it is not who you are.";
-  const promptLines = [
+    readonly CatalogSkill[],
+): string[] {
+  return [
     "You are Sky Code, an AI-powered CLI coding assistant.",
     "You help the user read, write, and edit files, run shell commands, search the web, and call connected MCP tools.",
     "",
@@ -705,26 +689,65 @@ export function createSkyCodeSystemPrompt(
     ...formatCatalogSkillsForPrompt(
       catalogSkills,
     ),
-    "",
-    "When you want to use a tool, respond with ONLY a fenced code block tagged sky-tool containing a JSON object with \"tool\" and \"args\" keys.",
-    "Do not include any other text in that response.",
-    "Wait for the tool result before continuing.",
-    "",
-    "Local tool example:",
-    "```sky-tool",
-    "{\"tool\":\"read_file\",\"args\":{\"path\":\"/home/user/example.txt\"}}",
-    "```",
-    "",
-    "MCP tool example:",
-    "```sky-tool",
-    "{\"tool\":\"mcp_call\",\"args\":{\"server\":\"example-server\",\"name\":\"example-tool\",\"arguments\":{}}}",
-    "```",
-    "",
-    "Sub-agent delegation example:",
-    "```sky-tool",
-    "{\"tool\":\"delegate_to_agent\",\"args\":{\"agent\":\"code-reviewer\",\"task\":\"Review the supplied code for correctness problems.\",\"context\":\"Focus on src/index.ts.\"}}",
-    "```",
-    "",
+  ];
+}
+
+/**
+ * The `sky-tool` fenced-block protocol instructions and worked examples.
+ *
+ * Fully static (no session-specific content), so it is a constant rather than
+ * a builder function. Included only in the full legacy system prompt (see
+ * createSkyCodeSystemPrompt()); NativeStrategy and the final-answer prompt
+ * must never receive it, since native tool definitions or the "no tool call
+ * here" instruction take its place instead (see createSkyCodeCapabilitiesPrompt()
+ * and createSkyCodeFinalAnswerPrompt() below).
+ */
+const SKY_TOOL_PROTOCOL_LINES: readonly string[] = [
+  "When you want to use a tool, respond with ONLY a fenced code block tagged sky-tool containing a JSON object with \"tool\" and \"args\" keys.",
+  "Do not include any other text in that response.",
+  "Wait for the tool result before continuing.",
+  "",
+  "Local tool example:",
+  "```sky-tool",
+  "{\"tool\":\"read_file\",\"args\":{\"path\":\"/home/user/example.txt\"}}",
+  "```",
+  "",
+  "MCP tool example:",
+  "```sky-tool",
+  "{\"tool\":\"mcp_call\",\"args\":{\"server\":\"example-server\",\"name\":\"example-tool\",\"arguments\":{}}}",
+  "```",
+  "",
+  "Sub-agent delegation example:",
+  "```sky-tool",
+  "{\"tool\":\"delegate_to_agent\",\"args\":{\"agent\":\"code-reviewer\",\"task\":\"Review the supplied code for correctness problems.\",\"context\":\"Focus on src/index.ts.\"}}",
+  "```",
+];
+
+/**
+ * Builds the trailing identity/engine block shared by every Sky Code system
+ * prompt, regardless of tool-calling strategy: what Sky Code is, that the
+ * active model is a swappable reasoning engine rather than its identity, and
+ * how the user (not the model) changes that engine.
+ *
+ * @param {string} activeModel - Name of the language model currently serving
+ * this session, as configured through LiteLLM. Used only to let the model
+ * answer honestly if asked what it is running on; an empty string omits the
+ * specific name while still stating that a model is its engine, not its
+ * identity.
+ * @returns {string[]} Prompt lines, with no leading or trailing blank line.
+ */
+function buildSkyCodeIdentityLines(
+  activeModel: string,
+): string[] {
+  const trimmedActiveModel =
+    activeModel.trim();
+
+  const engineLine =
+    trimmedActiveModel.length > 0
+      ? `- Right now that engine is "${trimmedActiveModel}", reached through a LiteLLM proxy. Like a brain, it is swappable and it is not who you are.`
+      : "- That engine is swappable, reached through a LiteLLM proxy. Like a brain, it is not who you are.";
+
+  return [
     "Identity:",
     "- You are Sky Code, a CLI coding assistant. This identity is permanent: it does not change with the underlying language model.",
     "- The language model currently answering is your reasoning engine, not your identity.",
@@ -736,22 +759,250 @@ export function createSkyCodeSystemPrompt(
     "- Answer any question about Sky Code's own commands, configuration, or capabilities only from what is stated in this prompt; if it isn't stated here, say you don't know rather than guessing from general knowledge of similar tools.",
     "- Keep your own voice terse and direct: no filler, no unnecessary caveats, no em dashes.",
   ];
+}
 
+/**
+ * Appends the user's `~/.sky-code/sky.md` content, if any, to a set of
+ * already-built prompt lines.
+ *
+ * Passed through unfiltered and unconditionally, the same way for every
+ * strategy and every prompt variant this module builds (legacy, capabilities,
+ * final-answer): sky.md is arbitrary user-authored content that Sky Code has
+ * never parsed or selectively filtered, so this module does not start doing
+ * so now. In particular, a sky.md that still contains the default rule 7
+ * ("never write any text before the sky-tool fenced block", see
+ * DEFAULT_SKY_MD_CONTENT in config.ts) is still appended in full to
+ * NativeStrategy's and the final-answer prompt's output even though neither
+ * of those prompts offers the sky-tool protocol; a user switching a model to
+ * Native or Prompted should review their own sky.md for instructions that
+ * assumed the sky-tool protocol.
+ *
+ * @param {string[]} lines - Prompt lines built so far.
+ * @param {string} skyMdContent - Raw sky.md content; only appended if
+ * non-blank once trimmed.
+ * @returns {string[]} `lines` with the sky.md section appended, if any.
+ */
+function withSkyMdAppended(
+  lines: string[],
+  skyMdContent: string,
+): string[] {
   const trimmedSkyMdContent =
     skyMdContent.trim();
 
   if (
-    trimmedSkyMdContent.length >
+    trimmedSkyMdContent.length ===
     0
   ) {
-    promptLines.push(
-      "",
-      "User-defined operating rules (~/.sky-code/sky.md):",
-      trimmedSkyMdContent,
-    );
+    return lines;
   }
 
-  return promptLines.join("\n");
+  return [
+    ...lines,
+    "",
+    "User-defined operating rules (~/.sky-code/sky.md):",
+    trimmedSkyMdContent,
+  ];
+}
+
+/**
+ * Builds the complete system prompt that defines Sky Code's tool-using
+ * behavior for the model, using the sky-tool fenced-block text protocol.
+ *
+ * This is LegacyStrategy's system prompt (see agent/strategies/legacy.ts) and
+ * Sky Code's original, pre-agent-loop prompt: it owns sky.md rule 7 (by
+ * appending sky.md content in full, see withSkyMdAppended()) and the static
+ * `sky-tool` fenced block protocol used by parseSkyToolRequest(). Its output
+ * is unchanged by the addition of createSkyCodeCapabilitiesPrompt() and
+ * createSkyCodeFinalAnswerPrompt() below: those are new, separate functions
+ * for NativeStrategy and the final-answer producer, not replacements for
+ * this one.
+ *
+ * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
+ * current session.
+ * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills supplied
+ * by loaded plugins.
+ * @param {readonly ActiveSubAgentDefinition[]} subAgents - Active sub-agents
+ * available for delegated tasks.
+ * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
+ * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`. Deliberately appended after everything else
+ * (rather than woven in near the top) so it sits closest to generation,
+ * which helps smaller/less-capable models retain it via recency weighting.
+ * @param {string} activeModel - Name of the language model currently serving
+ * this session, as configured through LiteLLM. Used only to let the model
+ * answer honestly if asked what it is running on; an empty string omits the
+ * specific name while still stating that a model is its engine, not its
+ * identity. For the same recency reason as skyMdContent, the identity block
+ * this produces is placed near the end of the prompt rather than the top.
+ * @returns {string} Complete newline-delimited system prompt sent to the model.
+ */
+export function createSkyCodeSystemPrompt(
+  mcpTools:
+    readonly McpToolDefinition[] = [],
+  pluginSkills:
+    readonly ActivePluginSkill[] = [],
+  subAgents:
+    readonly ActiveSubAgentDefinition[] = [],
+  catalogSkills:
+    readonly CatalogSkill[] = [],
+  skyMdContent:
+    string = "",
+  activeModel:
+    string = "",
+): string {
+  const promptLines = [
+    ...buildSkyCodeCapabilitiesLines(
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      catalogSkills,
+    ),
+    "",
+    ...SKY_TOOL_PROTOCOL_LINES,
+    "",
+    ...buildSkyCodeIdentityLines(
+      activeModel,
+    ),
+  ];
+
+  return withSkyMdAppended(
+    promptLines,
+    skyMdContent,
+  ).join("\n");
+}
+
+/**
+ * Builds NativeStrategy's system prompt: the same capabilities and identity
+ * content as createSkyCodeSystemPrompt(), but with no `sky-tool` fenced-block
+ * protocol instructions or examples.
+ *
+ * Native tool-calling providers receive tool definitions through their own
+ * native `tools` interface (see NativeCompletionRequest in
+ * agent/model-client.ts), so embedding the text-protocol instructions here as
+ * well would tell the model to do the same thing two contradictory ways.
+ * sky.md content is still appended in full (see withSkyMdAppended()'s doc
+ * comment for why that is not filtered even though it may itself mention the
+ * sky-tool protocol).
+ *
+ * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
+ * current session.
+ * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills supplied
+ * by loaded plugins.
+ * @param {readonly ActiveSubAgentDefinition[]} subAgents - Active sub-agents
+ * available for delegated tasks.
+ * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
+ * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`; see withSkyMdAppended().
+ * @param {string} activeModel - Name of the language model currently serving
+ * this session; see buildSkyCodeIdentityLines().
+ * @returns {string} Complete newline-delimited system prompt, with no
+ * `sky-tool` text anywhere in it.
+ */
+export function createSkyCodeCapabilitiesPrompt(
+  mcpTools:
+    readonly McpToolDefinition[] = [],
+  pluginSkills:
+    readonly ActivePluginSkill[] = [],
+  subAgents:
+    readonly ActiveSubAgentDefinition[] = [],
+  catalogSkills:
+    readonly CatalogSkill[] = [],
+  skyMdContent:
+    string = "",
+  activeModel:
+    string = "",
+): string {
+  const promptLines = [
+    ...buildSkyCodeCapabilitiesLines(
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      catalogSkills,
+    ),
+    "",
+    ...buildSkyCodeIdentityLines(
+      activeModel,
+    ),
+  ];
+
+  return withSkyMdAppended(
+    promptLines,
+    skyMdContent,
+  ).join("\n");
+}
+
+/**
+ * Builds the system prompt used only to compose the final, user-facing reply
+ * once the agent loop has determined no further tool action is required (see
+ * FinalAnswerProducer in agent/types.ts).
+ *
+ * Shares the same capabilities and identity content as
+ * createSkyCodeCapabilitiesPrompt() (also with no `sky-tool` protocol text),
+ * plus an explicit trailing instruction that this call is for composing prose
+ * only: it must never tell the model to request a tool, since by the time
+ * this prompt is used the loop has already established that no tool call is
+ * needed. Used by exactly one FinalAnswerProducer regardless of which
+ * strategy handled this turn's tool calls (see runAgentLoop() in loop.ts:
+ * only reached from the "done" action, which today only PromptedStrategy
+ * returns).
+ *
+ * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
+ * current session.
+ * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills supplied
+ * by loaded plugins.
+ * @param {readonly ActiveSubAgentDefinition[]} subAgents - Active sub-agents
+ * available for delegated tasks.
+ * @param {readonly CatalogSkill[]} catalogSkills - Enabled catalog skills
+ * available to the current session.
+ * @param {string} skyMdContent - Optional user-authored operating rules read
+ * from `~/.sky-code/sky.md`; see withSkyMdAppended().
+ * @param {string} activeModel - Name of the language model currently serving
+ * this session; see buildSkyCodeIdentityLines().
+ * @returns {string} Complete newline-delimited system prompt, with no
+ * `sky-tool` text and no instruction to request a tool anywhere in it.
+ */
+export function createSkyCodeFinalAnswerPrompt(
+  mcpTools:
+    readonly McpToolDefinition[] = [],
+  pluginSkills:
+    readonly ActivePluginSkill[] = [],
+  subAgents:
+    readonly ActiveSubAgentDefinition[] = [],
+  catalogSkills:
+    readonly CatalogSkill[] = [],
+  skyMdContent:
+    string = "",
+  activeModel:
+    string = "",
+): string {
+  const promptLines = [
+    ...buildSkyCodeCapabilitiesLines(
+      mcpTools,
+      pluginSkills,
+      subAgents,
+      catalogSkills,
+    ),
+    "",
+    ...buildSkyCodeIdentityLines(
+      activeModel,
+    ),
+  ];
+
+  const linesWithSkyMd =
+    withSkyMdAppended(
+      promptLines,
+      skyMdContent,
+    );
+
+  return [
+    ...linesWithSkyMd,
+    "",
+    "Final answer instructions:",
+    "- This call is only to compose the final conversational reply for this turn, grounded in the tool results already recorded above.",
+    "- Do not request a tool here, in any format. Write only the plain-language answer the user should see.",
+  ].join("\n");
 }
 
 /**
@@ -1340,12 +1591,71 @@ function isToolName(
 }
 
 /**
+ * Validates a candidate tool name and its (not yet schema-checked) arguments
+ * object into a fully validated SkyToolRequest.
+ *
+ * This is the one place a {tool, args} pair coming from anywhere - a parsed
+ * sky-tool JSON block, a native provider's tool call, PromptedStrategy's
+ * selection response - is turned into a trustworthy SkyToolRequest.
+ * parseSkyToolBlockJson() is now a thin wrapper over this function for the
+ * sky-tool-block-specific parts (JSON parsing, requiring an object body).
+ * agent/strategies/native.ts and agent/strategies/prompted.ts call this
+ * function directly, before either ever turns a candidate tool call into an
+ * AgentAction: a validation failure there becomes part of the same
+ * corrective retry loop as any other non-compliant response, since no tool
+ * has actually executed yet. The eventual executor adapter (live
+ * integration, not yet built) also calls this defensively, since a
+ * strategy validating correctly is not a substitute for the boundary that
+ * actually dispatches a tool.
+ *
+ * @param {unknown} tool - Candidate tool name.
+ * @param {unknown} args - Candidate arguments object, not yet validated
+ * against that tool's schema.
+ * @returns {SkyToolRequest} Fully validated Sky Code tool request.
+ * @throws {Error} If tool is not a recognized Sky Code tool name.
+ * @throws {SkyToolValidationError} If args fails that tool's specific
+ * argument validation.
+ *
+ * Side effects: none.
+ */
+export function validateSkyToolRequest(
+  tool: unknown,
+  args: unknown,
+): SkyToolRequest {
+  if (!isToolName(tool)) {
+    throw new Error(
+      `Unknown Sky Code tool: ${String(tool)}`,
+    );
+  }
+
+  // From this point on, `tool` is a confirmed, valid ToolName, so any
+  // further validation failure can be reported with a concrete example for
+  // this specific tool (see SkyToolValidationError) instead of only the
+  // abstract rule that was broken.
+  try {
+    return parseSkyToolArgsForKnownTool(
+      tool,
+      args,
+    );
+  } catch (error) {
+    throw new SkyToolValidationError(
+      error instanceof Error
+        ? error.message
+        : String(error),
+      tool,
+    );
+  }
+}
+
+/**
  * Parses and validates the JSON body captured from one complete `sky-tool`
  * fenced block.
  *
- * This helper contains the JSON, tool-name, args-object, and tool-specific
- * validation shared by the leading request and any later complete blocks that
- * are inspected only to determine whether a multi-block warning is required.
+ * This helper contains the JSON and object-body checks specific to a
+ * sky-tool block; validateSkyToolRequest() (above) does the shared
+ * tool-name/args validation, so that part cannot drift between this path and
+ * agent/strategies/native.ts's or agent/strategies/prompted.ts's own
+ * validation of a candidate tool call obtained a different way.
  *
  * @param {string} jsonText - Raw text captured between the opening and closing
  * fences of one complete `sky-tool` block.
@@ -1380,32 +1690,10 @@ function parseSkyToolBlockJson(
     );
   }
 
-  const tool = parsed.tool;
-  const args = parsed.args;
-
-  if (!isToolName(tool)) {
-    throw new Error(
-      `Unknown Sky Code tool: ${String(tool)}`,
-    );
-  }
-
-  // From this point on, `tool` is a confirmed, valid ToolName, so any
-  // further validation failure can be reported with a concrete example for
-  // this specific tool (see SkyToolValidationError) instead of only the
-  // abstract rule that was broken.
-  try {
-    return parseSkyToolArgsForKnownTool(
-      tool,
-      args,
-    );
-  } catch (error) {
-    throw new SkyToolValidationError(
-      error instanceof Error
-        ? error.message
-        : String(error),
-      tool,
-    );
-  }
+  return validateSkyToolRequest(
+    parsed.tool,
+    parsed.args,
+  );
 }
 
 /**
@@ -1675,22 +1963,200 @@ function parseSkyToolArgsForKnownTool(
 }
 
 /**
- * Parses and validates a model response containing a Sky Code tool request.
+ * Every distinct outcome a model response can have with respect to sky-tool
+ * fenced blocks, as produced by analyzeSkyToolResponse().
+ *
+ * This is a strict refinement of parseSkyToolRequest()'s older
+ * `SkyToolRequest | null` (+ thrown error) result: that shape cannot tell a
+ * caller "there was exactly one valid block" apart from "there was more than
+ * one valid block", which is exactly the distinction
+ * agent/strategies/legacy.ts (LegacyStrategy) needs in order to never
+ * execute anything from a response that requested more than one action at
+ * once.
+ */
+export type SkyToolParseOutcome =
+  | {
+      /** No complete sky-tool block was found; this is an ordinary response. */
+      kind: "none";
+    }
+  | {
+      /** Exactly one complete, valid sky-tool block was found. */
+      kind: "single";
+      request: SkyToolRequest;
+    }
+  | {
+      /**
+       * More than one complete, valid sky-tool block was found. `leading` is
+       * the first block, already parsed and validated; `count` is the total
+       * number of valid blocks found, including the leading one. A later
+       * block that fails validation on its own does not count here (see
+       * analyzeSkyToolResponse()).
+       */
+      kind: "multiple";
+      count: number;
+      leading: SkyToolRequest;
+    }
+  | {
+      /**
+       * A complete sky-tool block was found but could not be turned into a
+       * valid request: it did not start the response, its JSON was invalid,
+       * the tool name was unknown, args was not an object, or a
+       * tool-specific argument failed validation. `error` is the original
+       * thrown error value, unchanged, so a caller that needs its exact
+       * type (for example an existing `instanceof SkyToolValidationError`
+       * check) still can.
+       */
+      kind: "malformed";
+      error: unknown;
+    };
+
+/**
+ * Fully analyzes a model response for sky-tool fenced blocks.
  *
  * A valid leading tool request must begin the trimmed model response and must
  * contain a complete fenced `sky-tool` block whose contents are a JSON object
  * containing recognized `tool` and object-valued `args` properties.
  *
- * The leading block is validated exactly as before. Later complete fenced
- * blocks are inspected only to determine whether they also contain fully valid
- * Sky Code tool requests. If more than one valid request is present, only the
- * leading request is returned and a terminal warning explains that the
- * additional valid requests were ignored and suggests running /compact.
+ * The leading block is validated first. Later complete fenced blocks are
+ * inspected only to determine whether they also contain fully valid Sky Code
+ * tool requests; a later block that contains invalid JSON or otherwise fails
+ * normal Sky Code tool validation does not count toward the "multiple"
+ * outcome; a response with no complete sky-tool block produces "none".
  *
- * Later complete blocks containing invalid JSON or otherwise failing normal
- * Sky Code tool validation are not counted as additional valid blocks and do
- * not trigger the multi-block warning. An ordinary model response with no
- * complete sky-tool block still returns null.
+ * This is the one place that inspects SKY_TOOL_BLOCK_PATTERN and validates
+ * sky-tool JSON bodies. parseSkyToolRequest() is a thin compatibility
+ * wrapper over this function for callers that only need its older
+ * `SkyToolRequest | null` shape; new code that needs to react differently to
+ * "one valid block" than to "more than one valid block" (see
+ * SkyToolParseOutcome) should call this function directly instead.
+ *
+ * @param {string} responseText - Complete assistant response returned by the
+ * model.
+ * @returns {SkyToolParseOutcome} The classified outcome.
+ *
+ * Side effects: none. Unlike parseSkyToolRequest(), this function never
+ * writes to the console; deciding what to do about a "multiple" outcome
+ * (warn, ask the model to correct itself, or something else) is left
+ * entirely to the caller.
+ */
+export function analyzeSkyToolResponse(
+  responseText: string,
+): SkyToolParseOutcome {
+  const trimmedResponse =
+    responseText.trim();
+
+  const matches = [
+    ...trimmedResponse.matchAll(
+      SKY_TOOL_BLOCK_PATTERN,
+    ),
+  ];
+
+  // No complete tool block means this is an ordinary assistant response.
+  if (matches.length === 0) {
+    return {
+      kind: "none",
+    };
+  }
+
+  const match = matches[0];
+
+  // Preserve the existing protocol rule for the primary request: ordinary
+  // assistant prose cannot appear before the first complete tool block.
+  if (
+    !match ||
+    match.index !== 0
+  ) {
+    return {
+      kind: "malformed",
+      error: new Error(
+        "A sky-tool request must begin the model response",
+      ),
+    };
+  }
+
+  const jsonText = match[1];
+
+  if (jsonText === undefined) {
+    return {
+      kind: "malformed",
+      error: new Error(
+        "The sky-tool block is empty",
+      ),
+    };
+  }
+
+  // Validate the leading request before inspecting later blocks. This
+  // preserves the original function's error behavior instead of hiding a
+  // malformed primary request.
+  let request: SkyToolRequest;
+
+  try {
+    request =
+      parseSkyToolBlockJson(
+        jsonText,
+      );
+  } catch (error) {
+    return {
+      kind: "malformed",
+      error,
+    };
+  }
+
+  let validBlockCount = 1;
+
+  for (
+    const additionalMatch of
+    matches.slice(1)
+  ) {
+    const additionalJsonText =
+      additionalMatch[1];
+
+    if (
+      additionalJsonText ===
+        undefined
+    ) {
+      continue;
+    }
+
+    try {
+      parseSkyToolBlockJson(
+        additionalJsonText,
+      );
+
+      validBlockCount += 1;
+    } catch {
+      // A malformed later block cannot be executed, so it must not turn an
+      // otherwise valid primary request into a "multiple" outcome.
+    }
+  }
+
+  if (validBlockCount > 1) {
+    return {
+      kind: "multiple",
+      count: validBlockCount,
+      leading: request,
+    };
+  }
+
+  return {
+    kind: "single",
+    request,
+  };
+}
+
+/**
+ * Parses and validates a model response containing a Sky Code tool request.
+ *
+ * This is now a thin compatibility wrapper over analyzeSkyToolResponse(): it
+ * collapses that function's four-way SkyToolParseOutcome back down to this
+ * function's original `SkyToolRequest | null` (+ thrown error) shape,
+ * preserving its original behavior and error types exactly, including
+ * rethrowing a "malformed" outcome's original error value unchanged (so an
+ * existing `instanceof SkyToolValidationError` check downstream still
+ * works). New code that needs to distinguish "one valid block" from "more
+ * than one valid block" (for example agent/strategies/legacy.ts, which must
+ * not execute anything when more than one block is present) should call
+ * analyzeSkyToolResponse() directly instead of this function.
  *
  * @param {string} responseText - Complete assistant response returned by the
  * model.
@@ -1718,87 +2184,37 @@ export function parseSkyToolRequest(
     options?.warnOnMultiple ??
       true;
 
-  const trimmedResponse =
-    responseText.trim();
+  const outcome =
+    analyzeSkyToolResponse(
+      responseText,
+    );
 
-  const matches = [
-    ...trimmedResponse.matchAll(
-      SKY_TOOL_BLOCK_PATTERN,
-    ),
-  ];
-
-  // No complete tool block means this is an ordinary assistant response.
-  if (matches.length === 0) {
+  if (outcome.kind === "none") {
     return null;
   }
 
-  const match = matches[0];
-
-  // Preserve the existing protocol rule for the primary request: ordinary
-  // assistant prose cannot appear before the first complete tool block.
-  if (
-    !match ||
-    match.index !== 0
-  ) {
-    throw new Error(
-      "A sky-tool request must begin the model response",
-    );
+  if (outcome.kind === "malformed") {
+    throw outcome.error;
   }
 
-  const jsonText = match[1];
-
-  if (jsonText === undefined) {
-    throw new Error(
-      "The sky-tool block is empty",
-    );
+  if (outcome.kind === "single") {
+    return outcome.request;
   }
 
-  // Validate the leading request before inspecting later blocks. This preserves
-  // its existing error behavior instead of hiding a malformed primary request.
-  const request =
-    parseSkyToolBlockJson(
-      jsonText,
-    );
-
-  let validBlockCount = 1;
-
-  for (
-    const additionalMatch of
-    matches.slice(1)
-  ) {
-    const additionalJsonText =
-      additionalMatch[1];
-
-    if (
-      additionalJsonText ===
-        undefined
-    ) {
-      continue;
-    }
-
-    try {
-      parseSkyToolBlockJson(
-        additionalJsonText,
-      );
-
-      validBlockCount += 1;
-    } catch {
-      // A malformed later block cannot be executed, so it must not turn an
-      // otherwise valid primary request into a multi-block warning.
-    }
-  }
-
-  if (validBlockCount > 1 && warnOnMultiple) {
+  // outcome.kind === "multiple" from here on: preserve the original
+  // function's behavior of using the leading request and warning once,
+  // unless suppressed.
+  if (warnOnMultiple) {
     console.warn(
       [
-        `Warning: The model returned ${validBlockCount} sky-tool blocks. Only the first was used.`,
+        `Warning: The model returned ${outcome.count} sky-tool blocks. Only the first was used.`,
         "This can happen when the conversation is very long. Consider running /compact.",
         "",
       ].join("\n"),
     );
   }
 
-  return request;
+  return outcome.leading;
 }
 
 /**
@@ -1812,6 +2228,20 @@ export interface ToolExecutionResult {
    * why the operation could not be completed.
    */
   output: string;
+  /**
+   * True only when this handler performed some independent post-condition
+   * check, beyond whatever made `success` true, as a normal part of its own
+   * execution - for example, re-parsing a just-written document file to
+   * confirm its structure before reporting success. A handler that does not
+   * perform such a check omits this field or sets it false; either is
+   * treated as "not verified" downstream (see deriveCallState() in
+   * agent/types.ts).
+   *
+   * Only a handler itself may set this to true, based on a real check it
+   * actually ran. Nothing else in Sky Code - not the executor adapter, not
+   * the agent loop - infers this from the tool's name or its success alone.
+   */
+  verified?: boolean;
 }
 
 /**

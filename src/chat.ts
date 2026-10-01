@@ -337,6 +337,11 @@ export async function fetchAvailableModels(
  * for every non-empty generated text fragment received from the stream.
  * @param {string} systemPrompt - System instruction placed at the beginning of
  * the request. Defaults to SKY_CODE_SYSTEM_PROMPT.
+ * @param {"json_object"} [responseFormat] - When supplied, requests the
+ * endpoint's JSON-mode/constrained-decoding feature via `response_format`.
+ * Added for PromptedStrategy's tool-selection calls (see
+ * agent/adapters/litellm-client.ts); omitted by every existing caller, so
+ * this has no effect unless a caller opts in.
  * @returns {Promise<string>} Complete assistant text assembled from every
  * streamed content fragment.
  * @throws {Error} If the HTTP response is unsuccessful, has no stream body, or
@@ -354,6 +359,7 @@ export async function streamChatCompletion(
     (content: string) => void,
   systemPrompt: string =
     SKY_CODE_SYSTEM_PROMPT,
+  responseFormat?: "json_object",
 ): Promise<string> {
   const apiUrl =
     removeTrailingSlashes(
@@ -384,6 +390,13 @@ export async function streamChatCompletion(
             },
             ...messages,
           ],
+          ...(responseFormat
+            ? {
+                response_format: {
+                  type: responseFormat,
+                },
+              }
+            : {}),
         }),
       },
     );
@@ -555,4 +568,341 @@ export async function streamChatCompletion(
   }
 
   return fullResponse;
+}
+
+/**
+ * One OpenAI-compatible "function" tool definition sent to the endpoint's
+ * native tool-calling API.
+ *
+ * Kept separate from agent/types.ts's ToolDefinition, which is Sky Code's
+ * own canonical, provider-agnostic shape: this type is the wire format a
+ * native tool-calling request actually sends, and agent/adapters translates
+ * between the two (see buildChatToolDefinition() there).
+ */
+export interface ChatToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+/**
+ * One tool call as returned by the endpoint's native tool-calling API,
+ * matching the OpenAI-compatible response shape exactly (arguments arrive
+ * as a raw, possibly malformed JSON string; this module makes no attempt to
+ * parse or validate it, since that is agent/strategies/native.ts's job).
+ */
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/**
+ * One message in a native tool-calling conversation.
+ *
+ * Kept separate from ChatMessage/ChatRole (used by streamChatCompletion)
+ * rather than extending them, so the existing plain conversation path used
+ * by every current caller is completely untouched by native tool-calling
+ * support.
+ */
+export type NativeChatMessage =
+  | {
+      role: "user";
+      content: string;
+    }
+  | {
+      role: "assistant";
+      content: string | null;
+      tool_calls?: ChatToolCall[];
+    }
+  | {
+      role: "tool";
+      tool_call_id: string;
+      content: string;
+    };
+
+/**
+ * Result of one native tool-calling completion request.
+ */
+export interface NativeChatCompletionResult {
+  content: string | null;
+  toolCalls: ChatToolCall[];
+}
+
+/**
+ * Extracts a NativeChatCompletionResult from one parsed chat-completion
+ * response body.
+ *
+ * Network JSON is treated as untrusted at every level, matching
+ * extractStreamContent()'s defensive style above. An individual malformed
+ * tool_calls entry is skipped rather than making the whole response
+ * unusable, matching fetchAvailableModels()'s handling of individual
+ * malformed model-list entries.
+ *
+ * @param {unknown} value - Parsed JSON body of a non-streaming
+ * chat-completion response.
+ * @returns {NativeChatCompletionResult} The extracted content and tool
+ * calls.
+ * @throws {Error} If the response does not contain the expected top-level
+ * choices/message structure.
+ */
+function extractNativeCompletionResult(
+  value: unknown,
+): NativeChatCompletionResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    throw new Error(
+      "LiteLLM returned an invalid chat-completion response",
+    );
+  }
+
+  const record =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  const choices =
+    record.choices;
+
+  if (
+    !Array.isArray(choices) ||
+    choices.length === 0
+  ) {
+    throw new Error(
+      "LiteLLM chat-completion response did not contain any choices",
+    );
+  }
+
+  // Sky Code consumes the first choice only, matching
+  // extractStreamContent()'s single-response behavior.
+  const firstChoice =
+    choices[0];
+
+  if (
+    typeof firstChoice !==
+      "object" ||
+    firstChoice === null ||
+    Array.isArray(firstChoice)
+  ) {
+    throw new Error(
+      "LiteLLM chat-completion response contained an invalid choice",
+    );
+  }
+
+  const choiceRecord =
+    firstChoice as Record<
+      string,
+      unknown
+    >;
+
+  const message =
+    choiceRecord.message;
+
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    Array.isArray(message)
+  ) {
+    throw new Error(
+      "LiteLLM chat-completion response did not contain a message",
+    );
+  }
+
+  const messageRecord =
+    message as Record<
+      string,
+      unknown
+    >;
+
+  const content =
+    typeof messageRecord.content ===
+      "string"
+      ? messageRecord.content
+      : null;
+
+  const rawToolCalls =
+    messageRecord.tool_calls;
+
+  const toolCalls: ChatToolCall[] = [];
+
+  if (Array.isArray(rawToolCalls)) {
+    for (
+      const rawCall of
+      rawToolCalls
+    ) {
+      if (
+        typeof rawCall !==
+          "object" ||
+        rawCall === null ||
+        Array.isArray(rawCall)
+      ) {
+        continue;
+      }
+
+      const callRecord =
+        rawCall as Record<
+          string,
+          unknown
+        >;
+
+      const id =
+        callRecord.id;
+
+      const fn =
+        callRecord.function;
+
+      if (
+        typeof id !== "string" ||
+        typeof fn !== "object" ||
+        fn === null ||
+        Array.isArray(fn)
+      ) {
+        continue;
+      }
+
+      const fnRecord =
+        fn as Record<
+          string,
+          unknown
+        >;
+
+      const name =
+        fnRecord.name;
+
+      const args =
+        fnRecord.arguments;
+
+      if (
+        typeof name !== "string" ||
+        typeof args !== "string"
+      ) {
+        continue;
+      }
+
+      toolCalls.push({
+        id,
+        type: "function",
+        function: {
+          name,
+          arguments: args,
+        },
+      });
+    }
+  }
+
+  return {
+    content,
+    toolCalls,
+  };
+}
+
+/**
+ * Sends one non-streaming chat-completion request using the endpoint's
+ * native tool-calling protocol (OpenAI-compatible `tools`/`tool_choice`/
+ * `parallel_tool_calls`) and returns the model's chosen tool call(s), if
+ * any, plus any plain text content.
+ *
+ * Deliberately non-streaming, unlike streamChatCompletion(): reassembling
+ * tool-call argument fragments that can arrive split across streamed
+ * deltas, matched by index, is a real source of provider bugs (see two
+ * open LiteLLM issues found during this architecture's design: #39796,
+ * dropped tool_calls[].id/function.name on a full single-delta tool call,
+ * and #17246, missing tool_calls emission entirely for some backends). A
+ * single complete JSON response avoids that class of failure entirely.
+ * NativeStrategy (agent/strategies/native.ts) does not need streaming here:
+ * the eventual user-facing prose answer still streams normally, through
+ * streamChatCompletion(), once a turn reaches a final answer.
+ *
+ * @param {AppConfig} config - Validated API configuration containing
+ * endpoint and credentials.
+ * @param {string} model - Model identifier to request.
+ * @param {string} systemPrompt - System instruction placed at the beginning
+ * of the request.
+ * @param {NativeChatMessage[]} messages - Conversation turns, including any
+ * prior assistant tool-call records and "tool" result turns.
+ * @param {ChatToolDefinition[]} tools - Native tool definitions offered to
+ * the model.
+ * @param {boolean} parallelToolCalls - Sent as the request's
+ * `parallel_tool_calls` field.
+ * @returns {Promise<NativeChatCompletionResult>} The model's response,
+ * unvalidated beyond basic structural shape (see NativeStrategy for
+ * argument/compliance validation).
+ * @throws {Error} If the HTTP response is unsuccessful or does not contain
+ * the expected top-level choices/message structure.
+ * @throws {TypeError} If the network request itself fails.
+ *
+ * Side effect: performs an authenticated HTTP request.
+ */
+export async function requestNativeToolCompletion(
+  config: AppConfig,
+  model: string,
+  systemPrompt: string,
+  messages: NativeChatMessage[],
+  tools: ChatToolDefinition[],
+  parallelToolCalls: boolean,
+): Promise<NativeChatCompletionResult> {
+  const apiUrl =
+    removeTrailingSlashes(
+      config.apiUrl,
+    );
+
+  const response =
+    await fetch(
+      `${apiUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Bearer ${config.apiKey}`,
+          "Content-Type":
+            "application/json",
+          Accept:
+            "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          stream: false,
+          messages: [
+            {
+              role: "system",
+              content:
+                systemPrompt,
+            },
+            ...messages,
+          ],
+          tools,
+          tool_choice: "auto",
+          parallel_tool_calls:
+            parallelToolCalls,
+        }),
+      },
+    );
+
+  if (!response.ok) {
+    const errorBody =
+      await readErrorBody(
+        response,
+      );
+
+    throw new Error(
+      `LiteLLM native tool-calling request failed: HTTP ${response.status}: ${errorBody}`,
+    );
+  }
+
+  const payload: unknown =
+    await response.json();
+
+  return extractNativeCompletionResult(
+    payload,
+  );
 }
