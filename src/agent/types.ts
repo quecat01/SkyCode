@@ -86,7 +86,10 @@ export interface ToolDefinition {
  * - verified: the tool handler returned success AND reported verified: true
  *   on its own result, meaning it performed some independent post-condition
  *   check as a normal part of its own execution. Never assigned by
- *   inferring from the tool's name; see deriveCallState().
+ *   inferring from the tool's name; see deriveCallState(). Scope: this is
+ *   the tool's own structural post-condition only - never proof that every
+ *   semantic requirement in the user's actual goal was satisfied. Do not
+ *   broaden it to mean "goal satisfied" anywhere it is read.
  * - failed: the tool handler ran and returned (or threw) a failure.
  * - interrupted: Sky stopped (crash, restart, session end) while this call
  *   was pending or running, with no result ever recorded. Distinct from
@@ -220,6 +223,12 @@ export interface AgentContext {
  * to confirm its structure before returning success). A handler with no
  * such check omits the field, or sets it false; either is treated as "not
  * verified" by deriveCallState().
+ *
+ * Scope: `verified: true` means only that the tool's own structural
+ * post-condition held, nothing more. It is not, and must never be read as,
+ * proof that every semantic requirement in the user's actual goal was
+ * satisfied - a tool handler has no way to check that. Do not silently
+ * broaden its meaning elsewhere in the codebase.
  *
  * `endsTurn: true` marks a result that should end the agent turn
  * immediately, without asking the strategy for another action - Sky Code's

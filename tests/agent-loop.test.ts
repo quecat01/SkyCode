@@ -1006,5 +1006,193 @@ describe(
         );
       },
     );
+
+    describe(
+      "reassessment and honesty after a failed tool result (generic: no tool-specific special-casing anywhere in this behavior)",
+      () => {
+        it(
+          "reproduces: successful prior artifact -> corrective request -> tool call fails because the target exists -> strategy returns done -> the final answer is exactly what FinalAnswerProducer grounded in that real failure, never a fabricated promise",
+          async () => {
+            const priorTurns: PlainConversationTurn[] = [
+              {
+                role: "user",
+                content: "create a report artifact called report.docx",
+              },
+              {
+                role: "assistant",
+                content: "Created report.docx.",
+              },
+            ];
+
+            const strategy = scriptedStrategy([
+              {
+                kind: "tool_call",
+                tool: "write_file",
+                arguments: {
+                  path: "report.docx",
+                },
+                callId: "call-1",
+              },
+              {
+                kind: "done",
+              },
+            ]);
+
+            const executor = scriptedExecutor([
+              {
+                success: false,
+                output:
+                  "report.docx already exists. Sky Code will never overwrite an existing file without being told to.",
+              },
+            ]);
+
+            const honestFailureText =
+              "I could not regenerate report.docx: it already exists and Sky Code never overwrites an existing file without being told to. No changes were made.";
+
+            const finalAnswer = fakeFinalAnswerProducer(
+              honestFailureText,
+            );
+
+            const outcome = await runAgentLoop(
+              "actually, regenerate report.docx with the updated figures",
+              priorTurns,
+              strategy,
+              NO_TOOLS,
+              MODEL,
+              executor,
+              finalAnswer,
+            );
+
+            // The returned text is exactly FinalAnswerProducer's own text:
+            // the loop never appends, alters, or substitutes anything of its
+            // own onto a "done" outcome.
+            expect(outcome).toEqual({
+              kind: "final_answer",
+              text: honestFailureText,
+              alreadyDisplayed: true,
+            });
+
+            // The strategy's second (reassessment) call must actually have
+            // been given the real failure, not a sanitized or omitted
+            // version of it.
+            expect(strategy.observedContexts).toHaveLength(2);
+
+            const failureSeenByStrategy =
+              strategy.observedContexts[1]!.history.find(
+                (event) => event.type === "tool_result",
+              );
+
+            expect(failureSeenByStrategy).toMatchObject({
+              type: "tool_result",
+              success: false,
+            });
+
+            // FinalAnswerProducer itself must also have been grounded in
+            // that same real failure and the full prior conversation,
+            // rather than asked to compose blind.
+            expect(finalAnswer.calls).toHaveLength(1);
+
+            const failureSeenByFinalAnswer =
+              finalAnswer.calls[0]!.history.find(
+                (event) => event.type === "tool_result",
+              );
+
+            expect(failureSeenByFinalAnswer).toMatchObject({
+              type: "tool_result",
+              success: false,
+            });
+
+            expect(finalAnswer.calls[0]!.priorTurns).toEqual(
+              priorTurns,
+            );
+          },
+        );
+
+        it(
+          "when an alternate tool is available after a failure, the strategy is given the failure result and may select that alternate tool instead of giving up",
+          async () => {
+            const strategy = scriptedStrategy([
+              {
+                kind: "tool_call",
+                tool: "write_file",
+                arguments: {
+                  path: "report.docx",
+                },
+                callId: "call-1",
+              },
+              {
+                kind: "tool_call",
+                tool: "read_file",
+                arguments: {
+                  path: "report.docx",
+                },
+                callId: "call-2",
+              },
+              {
+                kind: "done",
+              },
+            ]);
+
+            const executor = scriptedExecutor([
+              {
+                success: false,
+                output: "report.docx already exists.",
+              },
+              {
+                success: true,
+                output: "Current contents of report.docx: ...",
+              },
+            ]);
+
+            const finalAnswer = fakeFinalAnswerProducer(
+              "report.docx already exists; here are its current contents instead of overwriting it.",
+            );
+
+            const outcome = await runAgentLoop(
+              "regenerate the report",
+              NO_PRIOR_TURNS,
+              strategy,
+              NO_TOOLS,
+              MODEL,
+              executor,
+              finalAnswer,
+            );
+
+            expect(outcome.kind).toBe(
+              "final_answer",
+            );
+
+            // The call that chose the alternate tool must have had the
+            // first failure visible in its history.
+            expect(strategy.observedContexts).toHaveLength(3);
+
+            const failureSeenBeforeAlternateChoice =
+              strategy.observedContexts[1]!.history.find(
+                (event) => event.type === "tool_result",
+              );
+
+            expect(failureSeenBeforeAlternateChoice).toMatchObject({
+              type: "tool_result",
+              success: false,
+            });
+
+            expect(executor.calls).toEqual([
+              {
+                tool: "write_file",
+                args: {
+                  path: "report.docx",
+                },
+              },
+              {
+                tool: "read_file",
+                args: {
+                  path: "report.docx",
+                },
+              },
+            ]);
+          },
+        );
+      },
+    );
   },
 );

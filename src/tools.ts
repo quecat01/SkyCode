@@ -948,6 +948,18 @@ export function createSkyCodeCapabilitiesPrompt(
  * only reached from the "done" action, which today only PromptedStrategy
  * returns).
  *
+ * This trailing instruction also carries Sky Code's honesty invariant for
+ * this call specifically: since this completion is grounded in the turn's
+ * real recorded tool results (both successes and failures) and nothing else,
+ * it must never describe an action as happening, in progress, or about to
+ * happen unless a corresponding tool call is actually recorded above as
+ * having succeeded. This matters most after an unresolved tool failure (the
+ * strategy signaled "done" without a later tool call that fixed it): the
+ * reply must state the real failure and its practical limitation, never a
+ * promise or implication that the failed action will still be carried out.
+ * This is a generic instruction with no reference to any specific tool; it
+ * applies equally regardless of which tool failed.
+ *
  * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
  * current session.
  * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills supplied
@@ -1002,6 +1014,7 @@ export function createSkyCodeFinalAnswerPrompt(
     "Final answer instructions:",
     "- This call is only to compose the final conversational reply for this turn, grounded in the tool results already recorded above.",
     "- Do not request a tool here, in any format. Write only the plain-language answer the user should see.",
+    "- Never state or imply that an action \"will\" happen, is in progress, or has been completed, unless a corresponding tool call is recorded above as having actually succeeded. A recorded tool call that failed, with no later recorded tool call that resolved it, stays failed: describe the real failure and its practical limitation plainly instead of promising it will still be done.",
   ].join("\n");
 }
 
@@ -2240,6 +2253,14 @@ export interface ToolExecutionResult {
    * Only a handler itself may set this to true, based on a real check it
    * actually ran. Nothing else in Sky Code - not the executor adapter, not
    * the agent loop - infers this from the tool's name or its success alone.
+   *
+   * Scope: `verified: true` means only that this tool's own structural
+   * post-condition held (e.g. the written file parses back with the parts
+   * the handler just wrote). It is never proof that every semantic
+   * requirement in the user's actual goal was satisfied - a handler has no
+   * way to check that, and must not be read as if it did. Do not broaden
+   * `verified` elsewhere in the codebase to mean "the user's goal was met";
+   * it means exactly, and only, "this handler's own check passed."
    */
   verified?: boolean;
 }

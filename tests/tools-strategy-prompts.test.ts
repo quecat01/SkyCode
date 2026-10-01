@@ -213,6 +213,53 @@ describe(
         );
 
         it(
+          "explicitly forbids claiming or implying an action happened, is happening, or will happen unless a recorded tool call actually succeeded, with no reference to any specific tool",
+          () => {
+            const prompt =
+              createSkyCodeFinalAnswerPrompt();
+
+            expect(prompt).toContain(
+              'Never state or imply that an action "will" happen, is in progress, or has been completed, unless a corresponding tool call is recorded above as having actually succeeded.',
+            );
+
+            expect(prompt).toContain(
+              "describe the real failure and its practical limitation plainly instead of promising it will still be done",
+            );
+
+            // Generic invariant: the new instruction sentence itself (not
+            // the prompt as a whole, which legitimately lists the
+            // document-generation tools elsewhere) must not be written in a
+            // way that only applies to document-generation tools or any
+            // other specific tool name.
+            const neverStateInstructionLine =
+              prompt
+                .split("\n")
+                .find(
+                  (line) =>
+                    line.includes(
+                      'Never state or imply that an action "will" happen',
+                    ),
+                ) ?? "";
+
+            for (
+              const toolSpecificTerm of [
+                "docx",
+                "xlsx",
+                "pdf",
+                "pptx",
+                "write_file",
+              ]
+            ) {
+              expect(
+                neverStateInstructionLine.toLowerCase(),
+              ).not.toContain(
+                toolSpecificTerm,
+              );
+            }
+          },
+        );
+
+        it(
           "still includes the local tool descriptions and the identity/engine block",
           () => {
             const prompt =

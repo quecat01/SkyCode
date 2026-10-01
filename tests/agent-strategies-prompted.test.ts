@@ -45,6 +45,60 @@ const TOOLS: ToolDefinition[] = [
   },
 ];
 
+/**
+ * Two generic tools (never anything docgen/XLSX-specific), used by the
+ * post-failure reassessment tests below so the second one is a genuine
+ * alternate choice after the first one fails.
+ */
+const TWO_TOOLS: ToolDefinition[] = [
+  {
+    name: "write_file",
+    description: "Writes a file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+        },
+      },
+      required: [
+        "path",
+      ],
+    },
+    examples: [
+      {
+        arguments: {
+          path: "example.md",
+        },
+      },
+    ],
+    permissionCategory: "write-file",
+  },
+  {
+    name: "read_file",
+    description: "Reads a file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+        },
+      },
+      required: [
+        "path",
+      ],
+    },
+    examples: [
+      {
+        arguments: {
+          path: "example.md",
+        },
+      },
+    ],
+    permissionCategory: "read-file",
+  },
+];
+
 const EMPTY_CONTEXT: AgentContext = {
   priorTurns: [],
   goal: "write a file",
@@ -528,6 +582,153 @@ describe(
 
         expect(client.calls[0]!.systemPrompt).not.toContain(
           "sky-tool",
+        );
+      },
+    );
+
+    describe(
+      "reassessment after a failed tool result (generic invariant, not tool-specific)",
+      () => {
+        // Simulates the state runAgentLoop() would have already recorded by
+        // the time it calls getNextAction() again this turn: a prior attempt
+        // (within this same turn) that actually failed. Built from the real
+        // AgentEvent shapes, exactly as the loop itself records them, rather
+        // than any strategy-specific shorthand - see loop.ts's record()
+        // calls and history-rendering.ts's describeToolResult().
+        const historyWithOneFailedAttempt: AgentContext["history"] = [
+          {
+            type: "tool_requested",
+            callId: "call-1",
+            tool: "write_file",
+            arguments: {
+              path: "report.docx",
+            },
+          },
+          {
+            type: "tool_state_changed",
+            callId: "call-1",
+            state: "running",
+          },
+          {
+            type: "tool_result",
+            callId: "call-1",
+            success: false,
+            verified: false,
+            output:
+              "report.docx already exists. Sky Code will never overwrite an existing file without being told to.",
+          },
+        ];
+
+        // Frames the scenario in the user's own terms: a successful prior
+        // artifact already exists (priorTurns), then a corrective follow-up
+        // request this turn (goal) whose own first attempt just failed
+        // (history above).
+        const contextAfterFailure: AgentContext = {
+          priorTurns: [
+            {
+              role: "user",
+              content: "create a report artifact called report.docx",
+            },
+            {
+              role: "assistant",
+              content: "Created report.docx.",
+            },
+          ],
+          goal: "actually, regenerate report.docx with the updated figures",
+          history: historyWithOneFailedAttempt,
+        };
+
+        it(
+          "reassesses using the full tool set and may conclude done when the selector decides the goal cannot be completed",
+          async () => {
+            const client = scriptedTextClient([
+              JSON.stringify({
+                action: "done",
+              }),
+            ]);
+
+            const strategy = new PromptedStrategy(
+              client,
+            );
+
+            const action = await strategy.getNextAction(
+              contextAfterFailure,
+              TWO_TOOLS,
+              "fake-model",
+            );
+
+            expect(action).toEqual({
+              kind: "done",
+            });
+
+            // The failure must actually have been visible, not hidden or
+            // glossed over, by the time the selector concluded done.
+            const renderedFailure =
+              client.calls[0]!.turns.find(
+                (turn) =>
+                  turn.content.includes("Result: failed") &&
+                  turn.content.includes("already exists"),
+              );
+
+            expect(renderedFailure).toBeDefined();
+
+            // The full tool set (not just the one that failed) was still
+            // offered for reassessment.
+            expect(client.calls[0]!.systemPrompt).toContain(
+              "write_file",
+            );
+
+            expect(client.calls[0]!.systemPrompt).toContain(
+              "read_file",
+            );
+
+            expect(client.calls[0]!.systemPrompt).toContain(
+              "reassess using the full list of tools below",
+            );
+          },
+        );
+
+        it(
+          "reassesses using the full tool set and may select a different, available tool after the failure",
+          async () => {
+            const client = scriptedTextClient([
+              JSON.stringify({
+                action: "tool_call",
+                tool: "read_file",
+                arguments: {
+                  path: "report.docx",
+                },
+              }),
+            ]);
+
+            const strategy = new PromptedStrategy(
+              client,
+            );
+
+            const action = await strategy.getNextAction(
+              contextAfterFailure,
+              TWO_TOOLS,
+              "fake-model",
+            );
+
+            expect(action).toEqual({
+              kind: "tool_call",
+              tool: "read_file",
+              arguments: {
+                path: "report.docx",
+              },
+              callId: expect.any(String),
+            });
+
+            const renderedFailure =
+              client.calls[0]!.turns.find(
+                (turn) =>
+                  turn.content.includes("Result: failed") &&
+                  turn.content.includes("already exists"),
+              );
+
+            expect(renderedFailure).toBeDefined();
+          },
         );
       },
     );

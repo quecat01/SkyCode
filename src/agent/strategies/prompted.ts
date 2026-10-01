@@ -25,6 +25,15 @@
  * a strategy-level error thrown if the model still cannot produce a valid
  * selection after that budget is exhausted (mirroring NativeStrategy's
  * corrective-retry contract; see native.ts).
+ *
+ * getNextAction() is called fresh on every step of runAgentLoop(), with the
+ * full tool list and the complete real history (including any prior failed
+ * tool_result this turn) rendered back into the selection prompt - see
+ * renderContextAsPlainTurns(), history-rendering.ts. A failed tool result
+ * therefore never narrows what is offered next: the selection prompt also
+ * explicitly tells the model it may reassess and pick a different tool, or
+ * conclude {"action":"done"}, after seeing one. This is a generic property
+ * of every tool, never special-cased for any specific tool name.
  */
 import {
   v4 as createUuid,
@@ -111,6 +120,7 @@ function buildSelectionSystemPrompt(
     'To call a tool, respond with: {"action":"tool_call","tool":"<tool name>","arguments":{...}}',
     'When no further tool call is needed, respond with: {"action":"done"}',
     "Do not write a user-facing answer here; only select an action.",
+    "If the most recent tool result shown to you failed, reassess using the full list of tools below: select a different tool call if one could resolve or work around the failure, or respond {\"action\":\"done\"} if the goal cannot be completed with the available tools. Never assume a tool call succeeded only because you requested it; go only by the result you were actually shown.",
     "Available tools:",
     toolDescriptions,
   ].join("\n\n");
