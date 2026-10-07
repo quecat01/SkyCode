@@ -76,8 +76,13 @@ import {
 } from "./agent/strategies/prompted.js";
 
 import {
+  resolveNativeTransport,
   resolveStrategyKind,
 } from "./agent/strategy-selection.js";
+
+import {
+  selectRelevantTools,
+} from "./agent/tool-relevance.js";
 
 import {
   BUILTIN_TOOL_DEFINITIONS,
@@ -946,6 +951,13 @@ function buildToolCallStrategy(
         skyMdContent,
         activeModel,
       ),
+      {
+        // Native models receive only the tools plausibly relevant to the
+        // turn's request (deterministic, with a full-set fallback whenever
+        // relevance is uncertain; see tool-relevance.ts).
+        selectTools:
+          selectRelevantTools,
+      },
     );
   }
 
@@ -976,7 +988,8 @@ function buildToolCallStrategy(
  *
  * Used the same way regardless of which ToolCallStrategy is active this turn
  * (see FinalAnswerProducer's own doc comment in agent/types.ts): reached
- * only from a strategy's "done" action today (PromptedStrategy's case), but
+ * only from a strategy's "done" action today (PromptedStrategy's case, or
+ * NativeStrategy's final-answer fallback), but
  * not tied to it structurally, so it is built alongside the strategy at the
  * same refresh points rather than only when PromptedStrategy is active.
  *
@@ -1749,10 +1762,12 @@ export async function completeConversationTurn(
       // their text - only the trailing spacing (or the empty-response
       // notice) streamModelTurn's caller always added after a response
       // finished streaming is still needed. NativeStrategy's completion
-      // client (createLiteLLMNativeCompletionClient()) is deliberately kept
-      // non-streaming, so its text reaches here with alreadyDisplayed:
-      // false and is rendered once, through the same Markdown rendering
-      // system a streamed response uses (see createSkyCodeMarkdownStreamer,
+      // client (createLiteLLMNativeCompletionClient()) never displays
+      // anything itself - even its streamed transport assembles silently,
+      // so a reply is only shown after passing the final-answer check - so
+      // its text reaches here with alreadyDisplayed: false and is rendered
+      // once, through the same Markdown rendering system a streamed
+      // response uses (see createSkyCodeMarkdownStreamer,
       // markdown-render.ts) - never twice, and never as raw unrendered text.
       if (
         outcome.text.trim() ===
@@ -2566,9 +2581,13 @@ export async function runCli():
       config,
     );
 
+  // Streamed or non-streaming per model (resolveNativeTransport(),
+  // agent/strategy-selection.ts), decided per request so a /model switch
+  // needs no client rebuild.
   const nativeClient =
     createLiteLLMNativeCompletionClient(
       config,
+      resolveNativeTransport,
     );
 
   let strategy: ToolCallStrategy =

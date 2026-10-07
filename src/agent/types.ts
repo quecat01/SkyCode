@@ -323,9 +323,11 @@ export interface ToolExecutor {
  * context.
  *
  * Used by runAgentLoop() only when the active strategy returns
- * `{ kind: "done" }` (PromptedStrategy's case): the strategy's own narrow
- * tool-selection call never writes conversational prose, so the loop asks
- * for that text separately. Strategies that return
+ * `{ kind: "done" }`: PromptedStrategy's normal case, since its narrow
+ * tool-selection call never writes conversational prose, and NativeStrategy's
+ * fallback when its model's reply keeps failing the final-answer check (see
+ * final-answer-safety.ts). Either way the strategy has no usable reply text,
+ * so the loop asks for that text separately. Strategies that return
  * `{ kind: "final_answer", text }` (Native, Legacy) bypass this entirely,
  * since their own completion already produced the reply.
  *

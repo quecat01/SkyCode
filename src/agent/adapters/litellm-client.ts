@@ -15,6 +15,7 @@
 import {
   requestNativeToolCompletion,
   streamChatCompletion,
+  streamNativeToolCompletion,
   type ChatMessage,
   type ChatToolCall,
   type ChatToolDefinition,
@@ -37,6 +38,10 @@ import type {
 import type {
   ToolDefinition,
 } from "../types.js";
+
+import type {
+  NativeTransport,
+} from "../strategy-selection.js";
 
 /**
  * Translates one canonical ToolDefinition into the OpenAI-compatible wire
@@ -163,14 +168,26 @@ export function createLiteLLMTextCompletionClient(
 }
 
 /**
- * Creates a NativeCompletionClient backed by chat.ts's
- * requestNativeToolCompletion(), for NativeStrategy.
+ * Creates a NativeCompletionClient for NativeStrategy, backed by chat.ts's
+ * streamed (streamNativeToolCompletion()) or non-streaming
+ * (requestNativeToolCompletion()) native tool-calling request.
+ *
+ * The transport is decided per request, from the request's own model,
+ * so one client stays correct across a /model switch without being
+ * rebuilt.
  *
  * @param {AppConfig} config - Validated Sky Code API configuration.
+ * @param {(model: string) => NativeTransport} [resolveTransport] - Picks
+ * the transport for a model (in production, resolveNativeTransport(),
+ * agent/strategy-selection.ts). Omitted, every request is non-streaming,
+ * exactly as before streaming support existed.
  * @returns {NativeCompletionClient} A client backed by the real endpoint.
  */
 export function createLiteLLMNativeCompletionClient(
   config: AppConfig,
+  resolveTransport: (
+    model: string,
+  ) => NativeTransport = () => "non_streaming",
 ): NativeCompletionClient {
   return {
     async complete(
@@ -186,8 +203,15 @@ export function createLiteLLMNativeCompletionClient(
           buildNativeChatMessage,
         );
 
+      const send =
+        resolveTransport(
+          request.model,
+        ) === "streaming"
+          ? streamNativeToolCompletion
+          : requestNativeToolCompletion;
+
       const result =
-        await requestNativeToolCompletion(
+        await send(
           config,
           request.model,
           request.systemPrompt,
@@ -207,6 +231,23 @@ export function createLiteLLMNativeCompletionClient(
                 call.function.arguments,
             }),
           ),
+        // Only a streamed response can carry these (see
+        // NativeChatCompletionResult, chat.ts); spread conditionally so a
+        // non-streaming result's shape is exactly what it always was.
+        ...(result.protocolIssues &&
+        result.protocolIssues.length > 0
+          ? {
+              protocolIssues:
+                result.protocolIssues,
+            }
+          : {}),
+        ...(result.protocolNotes &&
+        result.protocolNotes.length > 0
+          ? {
+              protocolNotes:
+                result.protocolNotes,
+            }
+          : {}),
       };
     },
   };

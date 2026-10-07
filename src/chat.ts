@@ -19,6 +19,11 @@ import {
   SKY_CODE_SYSTEM_PROMPT,
 } from "./tools.js";
 
+import {
+  NativeToolCallStreamAssembler,
+  type NativeToolCallStreamAssemblerOptions,
+} from "./native-tool-stream.js";
+
 /**
  * Conversation roles that Sky Code includes in ordinary chat history.
  *
@@ -633,6 +638,19 @@ export type NativeChatMessage =
 export interface NativeChatCompletionResult {
   content: string | null;
   toolCalls: ChatToolCall[];
+  /**
+   * Reasons this response is unusable as-is, found while assembling a
+   * streamed response (see NativeToolCallStreamAssembler,
+   * native-tool-stream.ts). Absent or empty for a usable response, and
+   * always absent for the non-streaming path, whose response arrives whole.
+   * A caller must never execute any of `toolCalls` when this is non-empty.
+   */
+  protocolIssues?: string[];
+  /**
+   * Non-fatal irregularities corrected locally while assembling a streamed
+   * response (for example, a synthesized call ID), for diagnostics only.
+   */
+  protocolNotes?: string[];
 }
 
 /**
@@ -905,4 +923,236 @@ export async function requestNativeToolCompletion(
   return extractNativeCompletionResult(
     payload,
   );
+}
+
+/**
+ * Sends one streamed chat-completion request using the endpoint's native
+ * tool-calling protocol and assembles the result once the stream ends.
+ *
+ * Sends the same request body as requestNativeToolCompletion() (tools,
+ * `tool_choice: "auto"`, `parallel_tool_calls`) with `stream: true`. Every
+ * SSE `data:` chunk is handed to a NativeToolCallStreamAssembler
+ * (native-tool-stream.ts), which accumulates content and
+ * `delta.tool_calls` fragments by index. Nothing is returned, and so nothing
+ * can be executed, until the whole stream has been consumed and every call
+ * fully assembled; argument JSON is never parsed here (NativeStrategy does
+ * that after assembly).
+ *
+ * Kept alongside, not instead of, requestNativeToolCompletion(): the
+ * non-streaming request stays available as a per-model fallback (see
+ * NATIVE_TRANSPORT_CONFIG, agent/strategy-selection.ts) until streamed
+ * assembly has been proven against each model.
+ *
+ * Streamed text content is accumulated, not displayed: a native response's
+ * text is only shown after NativeStrategy has checked it is a genuine final
+ * answer (see final-answer-safety.ts), so it can never be shown before that
+ * check.
+ *
+ * @param {AppConfig} config - Validated API configuration containing
+ * endpoint and credentials.
+ * @param {string} model - Model identifier to request.
+ * @param {string} systemPrompt - System instruction placed at the beginning
+ * of the request.
+ * @param {NativeChatMessage[]} messages - Conversation turns, including any
+ * prior assistant tool-call records and "tool" result turns.
+ * @param {ChatToolDefinition[]} tools - Native tool definitions offered to
+ * the model.
+ * @param {boolean} parallelToolCalls - Sent as the request's
+ * `parallel_tool_calls` field.
+ * @param {NativeToolCallStreamAssemblerOptions} [assemblerOptions] -
+ * Optional assembler dependencies (tests inject a deterministic ID
+ * generator).
+ * @returns {Promise<NativeChatCompletionResult>} The assembled response,
+ * including any protocol issues/notes found during assembly.
+ * @throws {Error} If the HTTP response is unsuccessful, has no body, or
+ * contains an SSE data event that is not valid JSON.
+ * @throws {TypeError} If the network request or stream reading fails.
+ *
+ * Side effect: performs an authenticated HTTP request.
+ */
+export async function streamNativeToolCompletion(
+  config: AppConfig,
+  model: string,
+  systemPrompt: string,
+  messages: NativeChatMessage[],
+  tools: ChatToolDefinition[],
+  parallelToolCalls: boolean,
+  assemblerOptions?: NativeToolCallStreamAssemblerOptions,
+): Promise<NativeChatCompletionResult> {
+  const apiUrl =
+    removeTrailingSlashes(
+      config.apiUrl,
+    );
+
+  const response =
+    await fetch(
+      `${apiUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Bearer ${config.apiKey}`,
+          "Content-Type":
+            "application/json",
+          Accept:
+            "text/event-stream",
+        },
+        body: JSON.stringify({
+          model,
+          stream: true,
+          messages: [
+            {
+              role: "system",
+              content:
+                systemPrompt,
+            },
+            ...messages,
+          ],
+          tools,
+          tool_choice: "auto",
+          parallel_tool_calls:
+            parallelToolCalls,
+        }),
+      },
+    );
+
+  if (!response.ok) {
+    const errorBody =
+      await readErrorBody(
+        response,
+      );
+
+    throw new Error(
+      `LiteLLM native tool-calling request failed: HTTP ${response.status}: ${errorBody}`,
+    );
+  }
+
+  if (!response.body) {
+    throw new Error(
+      "LiteLLM returned a streaming native tool-calling response without a body",
+    );
+  }
+
+  const assembler =
+    new NativeToolCallStreamAssembler(
+      assemblerOptions,
+    );
+
+  const reader =
+    response.body.getReader();
+
+  // Same incremental decoding approach as streamChatCompletion(): network
+  // chunks need not align with UTF-8 characters or SSE line boundaries.
+  const decoder =
+    new TextDecoder();
+
+  let buffer = "";
+  let streamFinished = false;
+
+  const processLine = (
+    line: string,
+  ): void => {
+    const trimmedLine =
+      line.trim();
+
+    if (
+      trimmedLine === "" ||
+      !trimmedLine.startsWith(
+        "data:",
+      )
+    ) {
+      return;
+    }
+
+    const data =
+      trimmedLine
+        .slice(
+          "data:".length,
+        )
+        .trim();
+
+    if (data === "[DONE]") {
+      streamFinished = true;
+      return;
+    }
+
+    let parsed: unknown;
+
+    try {
+      parsed =
+        JSON.parse(data);
+    } catch (error) {
+      throw new Error(
+        `LiteLLM returned invalid streaming JSON: ${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`,
+      );
+    }
+
+    assembler.push(
+      parsed,
+    );
+  };
+
+  while (!streamFinished) {
+    const {
+      done,
+      value,
+    } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer +=
+      decoder.decode(
+        value,
+        {
+          stream: true,
+        },
+      );
+
+    const lines =
+      buffer.split(
+        /\r?\n/,
+      );
+
+    buffer =
+      lines.pop() ?? "";
+
+    for (
+      const line of lines
+    ) {
+      processLine(line);
+
+      if (streamFinished) {
+        break;
+      }
+    }
+  }
+
+  buffer += decoder.decode();
+
+  if (
+    !streamFinished &&
+    buffer.trim() !== ""
+  ) {
+    processLine(buffer);
+  }
+
+  const assembled =
+    assembler.finish();
+
+  return {
+    content:
+      assembled.content,
+    toolCalls:
+      assembled.toolCalls,
+    protocolIssues:
+      assembled.protocolIssues,
+    protocolNotes:
+      assembled.protocolNotes,
+  };
 }

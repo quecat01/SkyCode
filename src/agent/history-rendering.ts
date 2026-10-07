@@ -55,6 +55,44 @@ function describeToolResult(
 }
 
 /**
+ * Renders one recorded tool result as the `content` of a native role:"tool"
+ * message.
+ *
+ * The tool's real output is carried verbatim, never rewritten into prose,
+ * inside a small JSON envelope that also states the recorded outcome. The
+ * envelope exists because a native tool message has no success/failure
+ * field of its own, and a tool's raw output does not always say on its own
+ * that it failed (for example, a bare error string from a library).
+ *
+ * `postcondition_verified` is present only on a successful result and
+ * means exactly what AgentToolResult.verified means (types.ts): the tool's
+ * own structural check of its output passed. The key is named for that
+ * narrow meaning on purpose, so a model is never told a tool "verified"
+ * anything broader, such as the user's whole goal.
+ *
+ * @param {Extract<AgentEvent, {type: "tool_result"}>} event - A recorded
+ * tool_result event.
+ * @returns {string} JSON text for the tool message's content.
+ */
+export function describeToolResultForNative(
+  event: Extract<AgentEvent, { type: "tool_result" }>,
+): string {
+  return JSON.stringify(
+    event.success
+      ? {
+          status: "succeeded",
+          postcondition_verified:
+            event.verified,
+          output: event.output,
+        }
+      : {
+          status: "failed",
+          output: event.output,
+        },
+  );
+}
+
+/**
  * Renders AgentEvent history as a plain-text transcript, for strategies
  * (PromptedStrategy, LegacyStrategy) whose model call takes plain text turns
  * with no native tool-call structure.
@@ -145,10 +183,15 @@ export function renderHistoryAsPlainTurns(
  * Renders AgentEvent history as native tool-calling conversation turns, for
  * NativeStrategy.
  *
- * Mirrors renderHistoryAsPlainTurns()'s event handling exactly, but produces
+ * Mirrors renderHistoryAsPlainTurns()'s event ordering exactly, but produces
  * proper assistant tool-call records and role: "tool" results with matching
  * call IDs instead of plain text, matching what OpenAI-compatible providers
- * expect.
+ * expect. Each recorded call is reproduced faithfully: the same call ID the
+ * provider issued (so its role:"tool" result matches it), the same function
+ * name, and the complete arguments object the model sent (NativeStrategy
+ * records the full parsed arguments, not the schema-trimmed copy the
+ * executor runs; see native.ts). The tool message carries the real output
+ * verbatim (see describeToolResultForNative()), never a prose restatement.
  *
  * @param {readonly AgentEvent[]} history - Recorded events for this turn so
  * far.
@@ -211,7 +254,10 @@ export function renderHistoryAsNativeTurns(
       turns.push({
         role: "tool",
         toolCallId: event.callId,
-        content: describeToolResult(event),
+        content:
+          describeToolResultForNative(
+            event,
+          ),
       });
       continue;
     }

@@ -276,7 +276,13 @@ describe(
           {
             role: "tool",
             toolCallId: "call-1",
-            content: "Result: succeeded (independently verified)\nCreated report.docx",
+            // Real output verbatim inside a status envelope, never prose;
+            // postcondition_verified names the tool's own check only.
+            content: JSON.stringify({
+              status: "succeeded",
+              postcondition_verified: true,
+              output: "Created report.docx",
+            }),
           },
         ]);
       },
@@ -506,7 +512,13 @@ describe(
           {
             role: "tool",
             toolCallId: "call-1",
-            content: "Result: succeeded (independently verified)\nCreated report.docx",
+            // Real output verbatim inside a status envelope, never prose;
+            // postcondition_verified names the tool's own check only.
+            content: JSON.stringify({
+              status: "succeeded",
+              postcondition_verified: true,
+              output: "Created report.docx",
+            }),
           },
         ]);
       },

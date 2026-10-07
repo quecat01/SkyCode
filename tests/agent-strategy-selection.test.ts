@@ -5,12 +5,16 @@ import {
 } from "vitest";
 
 import {
+  DEFAULT_NATIVE_TRANSPORT,
   DEFAULT_STRATEGY_KIND,
   MODEL_STRATEGY_CONFIG,
+  NATIVE_TRANSPORT_CONFIG,
+  resolveNativeTransport,
   resolveStrategyKind,
 } from "../src/agent/strategy-selection.ts";
 
 import type {
+  NativeTransport,
   StrategyKind,
 } from "../src/agent/strategy-selection.ts";
 
@@ -18,34 +22,46 @@ describe(
   "agent/strategy-selection.ts",
   () => {
     it(
-      "MODEL_STRATEGY_CONFIG contains exactly one evidence-tested entry: gemma4-e4b-sky mapped to prompted, from the real P1-P5 Legacy-vs-Prompted comparison testing",
+      "MODEL_STRATEGY_CONFIG contains exactly the three models evidence-tested on a native tool-calling path, all mapped to native",
       () => {
         expect(
           MODEL_STRATEGY_CONFIG,
         ).toEqual(
           {
+            "gemma4-e2b-sky":
+              "native",
             "gemma4-e4b-sky":
-              "prompted",
+              "native",
+            "chatgpt-gpt-5.6-sol":
+              "native",
           },
         );
       },
     );
 
     it(
-      "resolves gemma4-e4b-sky to PromptedStrategy against the real, non-injected MODEL_STRATEGY_CONFIG",
+      "resolves each configured model to NativeStrategy against the real, non-injected MODEL_STRATEGY_CONFIG",
       () => {
-        expect(
-          resolveStrategyKind(
+        for (
+          const model of [
+            "gemma4-e2b-sky",
             "gemma4-e4b-sky",
-          ),
-        ).toBe(
-          "prompted",
-        );
+            "chatgpt-gpt-5.6-sol",
+          ]
+        ) {
+          expect(
+            resolveStrategyKind(
+              model,
+            ),
+          ).toBe(
+            "native",
+          );
+        }
       },
     );
 
     it(
-      "resolves any model with no explicit entry to DEFAULT_STRATEGY_KIND against the real MODEL_STRATEGY_CONFIG, even though it now has one entry",
+      "resolves any model with no explicit entry to DEFAULT_STRATEGY_KIND against the real MODEL_STRATEGY_CONFIG, even though it now has entries",
       () => {
         expect(
           resolveStrategyKind(
@@ -161,6 +177,101 @@ describe(
           ),
         ).toBe(
           DEFAULT_STRATEGY_KIND,
+        );
+      },
+    );
+  },
+);
+
+describe(
+  "agent/strategy-selection.ts native transport",
+  () => {
+    it(
+      "streams native requests for exactly the three native models",
+      () => {
+        expect(
+          NATIVE_TRANSPORT_CONFIG,
+        ).toEqual({
+          "gemma4-e2b-sky": "streaming",
+          "gemma4-e4b-sky": "streaming",
+          "chatgpt-gpt-5.6-sol": "streaming",
+        });
+      },
+    );
+
+    it(
+      "keeps the non-streaming request as the default for every other model",
+      () => {
+        expect(DEFAULT_NATIVE_TRANSPORT).toBe(
+          "non_streaming",
+        );
+
+        expect(
+          resolveNativeTransport(
+            "some-unlisted-model",
+          ),
+        ).toBe(
+          "non_streaming",
+        );
+      },
+    );
+
+    it(
+      "lets a model fall back to non-streaming through config alone",
+      () => {
+        const fallbackConfig: Record<
+          string,
+          NativeTransport
+        > = {
+          "gemma4-e4b-sky": "non_streaming",
+        };
+
+        expect(
+          resolveNativeTransport(
+            "gemma4-e4b-sky",
+            fallbackConfig,
+          ),
+        ).toBe(
+          "non_streaming",
+        );
+
+        expect(
+          resolveNativeTransport(
+            "  gemma4-e2b-sky  ",
+          ),
+        ).toBe(
+          "streaming",
+        );
+      },
+    );
+
+    it(
+      "keeps PromptedStrategy and LegacyStrategy selectable per model through config",
+      () => {
+        const config: Record<
+          string,
+          StrategyKind
+        > = {
+          "gemma4-e4b-sky": "prompted",
+          "old-model": "legacy",
+        };
+
+        expect(
+          resolveStrategyKind(
+            "gemma4-e4b-sky",
+            config,
+          ),
+        ).toBe(
+          "prompted",
+        );
+
+        expect(
+          resolveStrategyKind(
+            "old-model",
+            config,
+          ),
+        ).toBe(
+          "legacy",
         );
       },
     );

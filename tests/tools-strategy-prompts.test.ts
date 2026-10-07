@@ -154,6 +154,74 @@ describe(
         );
 
         it(
+          "ends with the native agent-execution instructions, placed after sky.md content for recency",
+          () => {
+            const prompt =
+              createSkyCodeCapabilitiesPrompt(
+                [],
+                [],
+                [],
+                [],
+                "7. Never write any text before the tool block.",
+              );
+
+            const skyMdIndex =
+              prompt.indexOf(
+                "7. Never write any text before the tool block.",
+              );
+
+            const executionIndex =
+              prompt.indexOf(
+                "Agent execution instructions:",
+              );
+
+            expect(skyMdIndex).toBeGreaterThan(
+              -1,
+            );
+            expect(executionIndex).toBeGreaterThan(
+              skyMdIndex,
+            );
+
+            for (
+              const required of [
+                "Request tools only through the native tool-calling interface.",
+                "Request exactly one tool call per response",
+                "Do not ask the user to say continue",
+                "A successful tool result means only that one action succeeded.",
+                "postcondition_verified: true in a tool result means only that the tool's own check of its output passed.",
+                "If a tool fails, read the error.",
+                "Never say an action will happen, is happening, or is next",
+              ]
+            ) {
+              expect(prompt).toContain(
+                required,
+              );
+            }
+
+            // Generic invariant: the execution block names no specific tool.
+            const executionBlock =
+              prompt.slice(
+                executionIndex,
+              );
+
+            for (
+              const toolName of [
+                "create_docx",
+                "create_xlsx",
+                "create_pdf",
+                "create_pptx",
+                "write_file",
+                "read_file",
+              ]
+            ) {
+              expect(executionBlock).not.toContain(
+                toolName,
+              );
+            }
+          },
+        );
+
+        it(
           "adds connected MCP tools the same way the legacy prompt does",
           () => {
             const prompt =

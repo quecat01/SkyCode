@@ -873,6 +873,37 @@ export function createSkyCodeSystemPrompt(
 }
 
 /**
+ * Agent-execution instructions for NativeStrategy's system prompt.
+ *
+ * Placed after the sky.md section, like the final-answer prompt's own
+ * instructions, for the same recency reason: a sky.md that still carries the
+ * default rule about writing a text tool block first would otherwise sit
+ * closest to generation and pull a native model back toward writing tool
+ * requests as text. That rule is not filtered out (sky.md is never
+ * filtered; see withSkyMdAppended()); this block states how it applies in
+ * native mode instead.
+ *
+ * Generic by design: nothing here names a specific tool. It states the
+ * same invariants the agent loop and final-answer check enforce
+ * (one call per response, automatic continuation, a tool success is not
+ * goal completion, `postcondition_verified` is the tool's own check only,
+ * and a final answer describes only what actually happened), so a model
+ * that follows it rarely triggers a corrective retry at all. It does not
+ * limit how much a capable model does per call, or whether it verifies
+ * its own work.
+ */
+const NATIVE_AGENT_EXECUTION_LINES: readonly string[] = [
+  "Agent execution instructions:",
+  "- Request tools only through the native tool-calling interface. Never write a tool request as text, JSON, or a code block in your reply. Any user-defined rule above that describes a text format for tool requests refers to this native interface here.",
+  "- Request exactly one tool call per response, then wait for its result. Sky Code runs it and sends you the real result automatically.",
+  "- After each result, decide the next step yourself. If the user's request still needs more actions, request the next tool call right away. Do not ask the user to say continue, and do not describe what you are about to do instead of doing it.",
+  "- A successful tool result means only that one action succeeded. It does not mean the user's whole request is complete: check what is still left.",
+  "- postcondition_verified: true in a tool result means only that the tool's own check of its output passed. It does not prove every requirement of the user's request was met. Check further with an available tool when that is useful; if you cannot verify something, say so plainly.",
+  "- If a tool fails, read the error. Then either try a different valid action, or, if the request cannot be completed with the available tools, say so.",
+  "- When no further tool call is needed, write the final answer. Describe only actions whose results are shown above, including failures. Never say an action will happen, is happening, or is next: if it is still needed, request it as a tool call instead.",
+];
+
+/**
  * Builds NativeStrategy's system prompt: the same capabilities and identity
  * content as createSkyCodeSystemPrompt(), but with no `sky-tool` fenced-block
  * protocol instructions or examples.
@@ -883,7 +914,8 @@ export function createSkyCodeSystemPrompt(
  * well would tell the model to do the same thing two contradictory ways.
  * sky.md content is still appended in full (see withSkyMdAppended()'s doc
  * comment for why that is not filtered even though it may itself mention the
- * sky-tool protocol).
+ * sky-tool protocol), followed by NATIVE_AGENT_EXECUTION_LINES, which states
+ * how native multi-step execution works and how such a rule applies here.
  *
  * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for the
  * current session.
@@ -927,10 +959,14 @@ export function createSkyCodeCapabilitiesPrompt(
     ),
   ];
 
-  return withSkyMdAppended(
-    promptLines,
-    skyMdContent,
-  ).join("\n");
+  return [
+    ...withSkyMdAppended(
+      promptLines,
+      skyMdContent,
+    ),
+    "",
+    ...NATIVE_AGENT_EXECUTION_LINES,
+  ].join("\n");
 }
 
 /**
@@ -945,8 +981,9 @@ export function createSkyCodeCapabilitiesPrompt(
  * this prompt is used the loop has already established that no tool call is
  * needed. Used by exactly one FinalAnswerProducer regardless of which
  * strategy handled this turn's tool calls (see runAgentLoop() in loop.ts:
- * only reached from the "done" action, which today only PromptedStrategy
- * returns).
+ * only reached from the "done" action, which PromptedStrategy returns
+ * normally, NativeStrategy returns only as its final-answer fallback, and
+ * LegacyStrategy never returns).
  *
  * This trailing instruction also carries Sky Code's honesty invariant for
  * this call specifically: since this completion is grounded in the turn's

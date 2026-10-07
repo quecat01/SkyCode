@@ -78,7 +78,8 @@ export type AgentEventListener =
  * in tests, a fake returning scripted results.
  * @param {FinalAnswerProducer} finalAnswerProducer - Produces the
  * user-facing reply when the strategy signals "done" without itself writing
- * that text (PromptedStrategy's case; see AgentAction in types.ts).
+ * that text (PromptedStrategy's case, or NativeStrategy's final-answer
+ * fallback; see AgentAction in types.ts).
  * @param {AgentEventListener} [onEvent] - Optional listener invoked once for
  * every event, in order, as it is recorded.
  * @returns {Promise<AgentTurnOutcome>} Either the final user-facing answer
@@ -168,11 +169,14 @@ export async function runAgentLoop(
     }
 
     if (action.kind === "done") {
-      // The strategy's own call was deliberately narrow and never wrote
-      // conversational prose (PromptedStrategy): the loop, not the
-      // strategy, produces the user-facing text, grounded in the same full
-      // context (prior session turns, goal, and this turn's real recorded
-      // history) rather than anything the narrow call said.
+      // The strategy has no usable reply text of its own: either its call
+      // was deliberately narrow and never wrote conversational prose
+      // (PromptedStrategy), or its model's reply kept failing the
+      // final-answer check (NativeStrategy, after its corrective budget;
+      // see final-answer-safety.ts). Either way the loop, not the strategy,
+      // produces the user-facing text, grounded in the same full context
+      // (prior session turns, goal, and this turn's real recorded history)
+      // rather than anything the strategy's own call said.
       const text =
         await finalAnswerProducer.produce(
           context,

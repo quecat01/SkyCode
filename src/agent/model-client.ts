@@ -116,6 +116,20 @@ export type NativeConversationTurn =
 export interface NativeCompletionResult {
   content: string | null;
   toolCalls: NativeToolCallRequest[];
+  /**
+   * Reasons the response is unusable as-is, found by the client while
+   * assembling it (today, only a streamed client: for example, a streamed
+   * tool call that never received a function name). NativeStrategy treats
+   * any entry as non-compliant and never executes anything from the
+   * response. Absent or empty means no such issue was found.
+   */
+  protocolIssues?: string[];
+  /**
+   * Non-fatal irregularities the client corrected locally (for example, a
+   * call ID the provider never sent), reported by NativeStrategy as
+   * diagnostics only.
+   */
+  protocolNotes?: string[];
 }
 
 /**

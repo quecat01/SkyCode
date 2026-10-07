@@ -16,6 +16,11 @@
  * available or how reliably they run - a model with no recorded evidence
  * gets the same proven, conservative strategy as every other unproven
  * model, rather than an optimistic guess.
+ *
+ * Native models also have a transport setting (NATIVE_TRANSPORT_CONFIG):
+ * whether their native tool-calling requests are streamed or sent as one
+ * non-streaming request. It is separate from strategy selection because it
+ * changes only how a response arrives, not how the agent loop behaves.
  */
 
 /**
@@ -51,19 +56,33 @@ export const DEFAULT_STRATEGY_KIND: StrategyKind =
  * provider name, only by a real recorded test result for that exact model
  * name.
  *
- * gemma4-e4b-sky was evidence-tested against this agent-loop architecture
- * (identical P1-P5 prompts run against both LegacyStrategy and
- * PromptedStrategy on real hardware): Legacy stalled after a single tool
- * call on every multi-step prompt tried (2 for 2 failures), while Prompted
- * completed every multi-step prompt tried (3 for 3) and recovered cleanly
- * from genuine tool-execution failures. Add further entries only after the
- * same kind of real, recorded testing for that exact model name, e.g.:
+ * Evidence behind the current entries:
+ * - gemma4-e2b-sky, gemma4-e4b-sky, and chatgpt-gpt-5.6-sol were run
+ *   through AnythingLLM's native, streamed tool-calling agent path, via the
+ *   same LiteLLM gateway Sky Code uses, in a controlled comparison: all
+ *   three completed autonomous multi-step tool sequences there
+ *   substantially better than through Sky Code's text-protocol strategies.
+ *   That establishes that each model and this gateway support native tool
+ *   calling; Sky Code's own native path still needs the same acceptance
+ *   test (development VM first) before the evidence counts for it.
+ * - Earlier evidence for gemma4-e4b-sky, still valid for its fallback:
+ *   identical P1-P5 prompts run against LegacyStrategy and PromptedStrategy
+ *   on real hardware. Legacy stalled after a single tool call on every
+ *   multi-step prompt tried (2 for 2 failures), while Prompted completed
+ *   every multi-step prompt tried (3 for 3) and recovered cleanly from
+ *   genuine tool-execution failures. If the native path does not hold up for
+ *   this model, "prompted" is the evidence-backed fallback entry to restore.
+ *
+ * Add further entries only after the same kind of real, recorded testing
+ * for that exact model name, e.g.:
  *   "some-model-name": "native",
  */
 export const MODEL_STRATEGY_CONFIG: Readonly<
   Record<string, StrategyKind>
 > = {
-  "gemma4-e4b-sky": "prompted",
+  "gemma4-e2b-sky": "native",
+  "gemma4-e4b-sky": "native",
+  "chatgpt-gpt-5.6-sol": "native",
 };
 
 /**
@@ -86,5 +105,65 @@ export function resolveStrategyKind(
   return (
     config[model.trim()] ??
     DEFAULT_STRATEGY_KIND
+  );
+}
+
+/**
+ * How a native-strategy model's completions are requested.
+ *
+ * - streaming: `stream: true`, with tool-call fragments assembled by index
+ *   before anything is acted on (see streamNativeToolCompletion(), chat.ts).
+ * - non_streaming: one complete JSON response
+ *   (requestNativeToolCompletion(), chat.ts) - the original implementation,
+ *   kept as the fallback until streaming is proven for a given model.
+ */
+export type NativeTransport =
+  | "streaming"
+  | "non_streaming";
+
+/**
+ * Transport used by any native-strategy model with no explicit entry in
+ * NATIVE_TRANSPORT_CONFIG: the original, simpler non-streaming request.
+ */
+export const DEFAULT_NATIVE_TRANSPORT: NativeTransport =
+  "non_streaming";
+
+/**
+ * Explicit native transport per model name, keyed exactly like
+ * MODEL_STRATEGY_CONFIG.
+ *
+ * The three native models are set to "streaming" because that is the
+ * transport AnythingLLM used successfully with them through the same
+ * gateway (see MODEL_STRATEGY_CONFIG's evidence notes). Changing an entry
+ * to "non_streaming" (or deleting it) falls that model back to the
+ * original non-streaming request without touching anything else.
+ */
+export const NATIVE_TRANSPORT_CONFIG: Readonly<
+  Record<string, NativeTransport>
+> = {
+  "gemma4-e2b-sky": "streaming",
+  "gemma4-e4b-sky": "streaming",
+  "chatgpt-gpt-5.6-sol": "streaming",
+};
+
+/**
+ * Resolves which transport a native-strategy model's requests use.
+ *
+ * @param {string} model - Active model identifier, exactly as configured.
+ * @param {Readonly<Record<string, NativeTransport>>} [config] - Transport
+ * config to consult. Defaults to NATIVE_TRANSPORT_CONFIG; overridable for
+ * tests.
+ * @returns {NativeTransport} The configured transport, or
+ * DEFAULT_NATIVE_TRANSPORT when no entry exists.
+ *
+ * Side effects: none.
+ */
+export function resolveNativeTransport(
+  model: string,
+  config: Readonly<Record<string, NativeTransport>> = NATIVE_TRANSPORT_CONFIG,
+): NativeTransport {
+  return (
+    config[model.trim()] ??
+    DEFAULT_NATIVE_TRANSPORT
   );
 }
