@@ -32,6 +32,11 @@ import type {
   FinalAnswerProducer,
 } from "../types.js";
 
+import {
+  buildExecutionLedger,
+  renderExecutionLedger,
+} from "../execution-ledger.js";
+
 /**
  * Creates a FinalAnswerProducer backed by a real plain-text completion
  * client.
@@ -65,9 +70,22 @@ export function createFinalAnswerProducer(
           context,
         );
 
+      // The authoritative record of this turn's tool calls, so the reply is
+      // written from what actually happened rather than from the model's
+      // recollection (see execution-ledger.ts). Omitted when no tool ran.
+      const ledger =
+        buildExecutionLedger(
+          context.history,
+        );
+
+      const groundedPrompt =
+        ledger.length === 0
+          ? systemPrompt
+          : `${systemPrompt}\n\nExecution record for this turn (authoritative; the reply must agree with it exactly, including every success and every failure):\n${renderExecutionLedger(ledger)}`;
+
       return client.complete(
         model,
-        systemPrompt,
+        groundedPrompt,
         turns,
         signal
           ? {

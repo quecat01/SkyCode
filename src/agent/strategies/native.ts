@@ -61,6 +61,13 @@ import {
 } from "../cancellation.js";
 
 import {
+  buildExecutionLedger,
+  buildLedgerFallbackAnswer,
+  checkAnswerAgainstLedger,
+  renderExecutionLedger,
+} from "../execution-ledger.js";
+
+import {
   validateSkyToolRequest,
 } from "../../tools.js";
 
@@ -75,6 +82,7 @@ import type {
 import type {
   AgentAction,
   AgentContext,
+  AgentEvent,
   DiagnosticReporter,
   ToolCallStrategy,
   ToolDefinition,
@@ -109,6 +117,10 @@ type Compliance =
     }
   | {
       kind: "unsafe_final_answer";
+      reason: string;
+    }
+  | {
+      kind: "untruthful_final_answer";
       reason: string;
     };
 
@@ -147,12 +159,16 @@ export interface NativeStrategyOptions {
  * @param {readonly string[]} knownToolNames - Every tool name available
  * this turn (offered or not), used to recognize a tool request written as
  * text.
+ * @param {readonly AgentEvent[]} history - This turn's recorded events, used
+ * to check a final answer against what actually happened (see
+ * execution-ledger.ts).
  * @returns {Compliance} The classified outcome.
  */
 function checkCompliance(
   result: NativeCompletionResult,
   offeredTools: ToolDefinition[],
   knownToolNames: readonly string[],
+  history: readonly AgentEvent[],
 ): Compliance {
   if (
     result.protocolIssues &&
@@ -186,6 +202,21 @@ function checkCompliance(
         return {
           kind: "unsafe_final_answer",
           reason: `Its reply cannot be accepted as a final answer: ${safety.reason}`,
+        };
+      }
+
+      const consistency =
+        checkAnswerAgainstLedger(
+          result.content,
+          buildExecutionLedger(
+            history,
+          ),
+        );
+
+      if (!consistency.consistent) {
+        return {
+          kind: "untruthful_final_answer",
+          reason: `Its reply contradicts the recorded results of this turn: ${consistency.reason}`,
         };
       }
 
@@ -314,6 +345,8 @@ function toEchoSafeCall(
  *
  * @param {NativeCompletionResult} result - The rejected response.
  * @param {Compliance & {reason: string}} compliance - Why it was rejected.
+ * @param {readonly AgentEvent[]} history - This turn's recorded events, whose
+ * ledger is shown to the model when its answer contradicted it.
  * @returns {NativeConversationTurn[]} Turns to append before retrying.
  */
 function buildCorrectiveTurns(
@@ -322,6 +355,7 @@ function buildCorrectiveTurns(
     Compliance,
     { reason: string }
   >,
+  history: readonly AgentEvent[],
 ): NativeConversationTurn[] {
   if (result.toolCalls.length > 0) {
     const echoed =
@@ -352,6 +386,26 @@ function buildCorrectiveTurns(
         content:
           `Your previous response was not usable: ${compliance.reason} ` +
           "Nothing from it was executed. Respond with exactly one tool call, or plain text if no tool is needed.",
+      },
+    ];
+  }
+
+  if (
+    compliance.kind ===
+    "untruthful_final_answer"
+  ) {
+    return [
+      {
+        role: "assistant",
+        content: result.content,
+      },
+      {
+        role: "user",
+        content:
+          `${compliance.reason} ` +
+          "This is the authoritative record of every tool call this turn:\n" +
+          `${renderExecutionLedger(buildExecutionLedger(history))}\n` +
+          "Write the final answer again so that it agrees with this record exactly, including every success and every failure. If an action is still needed, request it as a native tool call instead.",
       },
     ];
   }
@@ -538,6 +592,7 @@ export class NativeStrategy implements ToolCallStrategy {
           result,
           offeredTools,
           knownToolNames,
+          context.history,
         );
 
       if (compliance.kind === "compliant_tool_call") {
@@ -572,8 +627,33 @@ export class NativeStrategy implements ToolCallStrategy {
         ...buildCorrectiveTurns(
           result,
           compliance,
+          context.history,
         ),
       );
+    }
+
+    if (
+      lastRejection?.kind ===
+      "untruthful_final_answer"
+    ) {
+      // The model's own account kept contradicting the record, so the
+      // record itself becomes the answer: deterministic, and true by
+      // construction.
+      onDiagnostic?.(
+        "NativeStrategy could not obtain a final answer consistent with the recorded results " +
+          `after ${MAX_CORRECTIVE_ATTEMPTS} corrective attempt(s); answering from the execution ledger instead.`,
+      );
+
+      return {
+        kind: "final_answer",
+        text:
+          buildLedgerFallbackAnswer(
+            buildExecutionLedger(
+              context.history,
+            ),
+          ),
+        alreadyDisplayed: false,
+      };
     }
 
     if (
