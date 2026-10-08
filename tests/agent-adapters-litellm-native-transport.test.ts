@@ -194,7 +194,12 @@ describe(
           );
 
         expect(body.stream).toBe(true);
-        expect(body.parallel_tool_calls).toBe(false);
+        expect(body).not.toHaveProperty(
+          "parallel_tool_calls",
+        );
+        expect(body).not.toHaveProperty(
+          "tool_choice",
+        );
 
         // Native structure reaches the wire unchanged: assistant tool_calls
         // with the original ID and arguments, then the matching tool message.
@@ -326,6 +331,12 @@ describe(
             );
 
           expect(body.stream).toBe(false);
+          expect(body).not.toHaveProperty(
+            "parallel_tool_calls",
+          );
+          expect(body).not.toHaveProperty(
+            "tool_choice",
+          );
         }
       },
     );

@@ -86,7 +86,7 @@ describe(
     });
 
     it(
-      "sends a streamed request carrying tools, tool_choice auto, and parallel_tool_calls false",
+      "sends a streamed request carrying tools but neither tool_choice nor parallel_tool_calls",
       async () => {
         const fetchMock = vi.fn(
           async () =>
@@ -122,7 +122,6 @@ describe(
           "system prompt",
           messages,
           TOOLS,
-          false,
         );
 
         const [url, init] =
@@ -144,9 +143,24 @@ describe(
           model: "gemma4-e4b-sky",
           stream: true,
           tools: TOOLS,
-          tool_choice: "auto",
-          parallel_tool_calls: false,
         });
+
+        expect(body).not.toHaveProperty(
+          "tool_choice",
+        );
+
+        expect(body).not.toHaveProperty(
+          "parallel_tool_calls",
+        );
+
+        expect(
+          Object.keys(body).sort(),
+        ).toEqual([
+          "messages",
+          "model",
+          "stream",
+          "tools",
+        ]);
 
         expect(body.messages[0]).toEqual({
           role: "system",
@@ -223,7 +237,6 @@ describe(
             "s",
             [],
             TOOLS,
-            false,
           );
 
         expect(result.content).toBeNull();
@@ -278,7 +291,6 @@ describe(
             "s",
             [],
             TOOLS,
-            false,
           );
 
         expect(result.toolCalls).toEqual([]);
@@ -308,7 +320,6 @@ describe(
             "s",
             [],
             TOOLS,
-            false,
           ),
         ).rejects.toThrow(
           "HTTP 503",

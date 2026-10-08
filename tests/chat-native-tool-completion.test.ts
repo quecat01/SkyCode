@@ -73,7 +73,7 @@ describe(
     });
 
     it(
-      "sends a non-streaming request carrying tools, tool_choice, and parallel_tool_calls",
+      "sends a non-streaming request carrying tools but neither tool_choice nor parallel_tool_calls",
       async () => {
         const fetchMock = vi.fn(
           async () =>
@@ -107,7 +107,6 @@ describe(
           "system prompt",
           messages,
           TOOLS,
-          false,
         );
 
         expect(fetchMock).toHaveBeenCalledOnce();
@@ -145,13 +144,25 @@ describe(
           TOOLS,
         );
 
-        expect(requestBody.tool_choice).toBe(
-          "auto",
+        // Some gateway backends reject these outright (LiteLLM's ollama_chat
+        // rejects parallel_tool_calls with HTTP 400), and tool_choice "auto"
+        // is already the default whenever tools are sent.
+        expect(requestBody).not.toHaveProperty(
+          "tool_choice",
         );
 
-        expect(requestBody.parallel_tool_calls).toBe(
-          false,
+        expect(requestBody).not.toHaveProperty(
+          "parallel_tool_calls",
         );
+
+        expect(
+          Object.keys(requestBody).sort(),
+        ).toEqual([
+          "messages",
+          "model",
+          "stream",
+          "tools",
+        ]);
       },
     );
 
@@ -192,7 +203,6 @@ describe(
             "system prompt",
             [],
             TOOLS,
-            false,
           );
 
         expect(result).toEqual({
@@ -238,7 +248,6 @@ describe(
             "system prompt",
             [],
             TOOLS,
-            false,
           );
 
         expect(result).toEqual({
@@ -293,7 +302,6 @@ describe(
             "system prompt",
             [],
             TOOLS,
-            false,
           );
 
         expect(result.toolCalls).toEqual([
@@ -333,7 +341,6 @@ describe(
             "system prompt",
             [],
             TOOLS,
-            false,
           ),
         ).rejects.toThrow(
           /LiteLLM native tool-calling request failed: HTTP 500/,
@@ -361,7 +368,6 @@ describe(
             "system prompt",
             [],
             TOOLS,
-            false,
           ),
         ).rejects.toThrow(
           /did not contain any choices/,

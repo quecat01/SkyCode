@@ -1,6 +1,6 @@
 /**
  * NativeStrategy: obtains the next agent action using a provider's own
- * native tool-calling protocol (OpenAI-compatible `tools`/`tool_choice`,
+ * native tool-calling protocol (OpenAI-compatible `tools`,
  * proper assistant tool-call records, role: "tool" results).
  *
  * One call to getNextAction() is one model decision. runAgentLoop()
@@ -14,11 +14,12 @@
  * carrying the real output (see renderHistoryAsNativeTurns(),
  * history-rendering.ts).
  *
- * Every request sets parallelToolCalls: false (see NativeCompletionRequest
- * in model-client.ts), since Sky Code's agent loop only ever executes one
- * action per step. A response NativeStrategy cannot use as one action is
- * non-compliant, and nothing from it is ever executed or shown:
- * - more than one tool call (parallelToolCalls ignored), an unknown tool
+ * Every request records parallelToolCalls: false as Sky Code's intent (see
+ * NativeCompletionRequest in model-client.ts; the field is not sent to the
+ * provider, since some backends reject it), and this strategy enforces one
+ * action per step itself. A response NativeStrategy cannot use as one
+ * action is non-compliant, and nothing from it is ever executed or shown:
+ * - more than one tool call, an unknown tool
  *   name, arguments that are not valid JSON, or arguments that fail the
  *   tool's schema;
  * - a streamed call the client could not fully assemble (see

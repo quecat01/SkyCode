@@ -242,7 +242,7 @@ describe(
     });
 
     it(
-      "translates canonical tools, conversation turns, and parallelToolCalls into the wire request",
+      "translates canonical tools and conversation turns into the wire request, without sending parallel_tool_calls or tool_choice",
       async () => {
         const fetchMock = vi.fn(
           async () =>
@@ -346,8 +346,14 @@ describe(
           },
         ]);
 
-        expect(requestBody.parallel_tool_calls).toBe(
-          false,
+        // NativeCompletionRequest.parallelToolCalls is Sky Code's internal
+        // intent only; it is never put on the wire.
+        expect(requestBody).not.toHaveProperty(
+          "parallel_tool_calls",
+        );
+
+        expect(requestBody).not.toHaveProperty(
+          "tool_choice",
         );
 
         expect(requestBody.messages[0]).toEqual({

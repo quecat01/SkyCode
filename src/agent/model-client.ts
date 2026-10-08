@@ -9,12 +9,12 @@
  *   LegacyStrategy, both of which embed everything the model needs (tool
  *   schemas, or the sky-tool block instructions) directly inside text.
  * - NativeCompletionClient: a completion using a provider's own
- *   function/tool-calling protocol (tools + tool_choice, proper assistant
+ *   function/tool-calling protocol (tools, proper assistant
  *   tool-call records, role: "tool" results). Used only by NativeStrategy.
  *
  * Neither interface is implemented in this module. Production
  * implementations will adapt Sky Code's existing chat.ts (streamChatCompletion
- * for TextCompletionClient; an extended version supporting tools/tool_choice
+ * for TextCompletionClient; an extended version supporting tools
  * for NativeCompletionClient); test implementations are fakes that return
  * scripted completions, so strategy tests never depend on a real model or
  * network access. Keeping these as plain interfaces here, rather than
@@ -142,16 +142,19 @@ export interface NativeCompletionRequest {
   tools: ToolDefinition[];
   /**
    * Whether the provider may return more than one tool call in a single
-   * response. NativeStrategy always sets this to false, since Sky Code's
-   * agent loop only ever executes one action per step. A
-   * NativeCompletionClient implementation whose underlying provider is
-   * configured (elsewhere, via per-model capability configuration) as known
-   * to honor this should pass it straight through as the provider's own
-   * parallel-tool-call flag; one that cannot honor it is expected to still
-   * return whatever the provider actually produced rather than raising an
-   * error itself. Either way, NativeStrategy treats an unrequested
-   * multi-tool-call response as non-compliant rather than assuming this
-   * flag was honored.
+   * response, as Sky Code's own intent. NativeStrategy always sets this to
+   * false, since Sky Code's agent loop only ever executes one action per
+   * step.
+   *
+   * It is not sent to the provider: the production client
+   * (createLiteLLMNativeCompletionClient(), adapters/litellm-client.ts)
+   * omits the `parallel_tool_calls` wire field entirely, because some
+   * gateway backends reject it outright (see the note above
+   * requestNativeToolCompletion() in chat.ts). One action per step is
+   * enforced by NativeStrategy itself, which treats a multi-tool-call
+   * response as non-compliant regardless of this field. It stays here as the
+   * single place a future provider-specific override could read from, if a
+   * provider ever demonstrably needs the wire field.
    */
   parallelToolCalls: boolean;
 }

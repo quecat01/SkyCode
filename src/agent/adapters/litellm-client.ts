@@ -217,7 +217,6 @@ export function createLiteLLMNativeCompletionClient(
           request.systemPrompt,
           messages,
           tools,
-          request.parallelToolCalls,
         );
 
       return {

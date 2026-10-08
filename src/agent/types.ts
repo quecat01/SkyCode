@@ -383,8 +383,8 @@ export type DiagnosticReporter =
  * only place that knows how a particular model/provider actually produces a
  * tool call. Every implementation must return exactly one AgentAction per
  * call: an implementation that receives multiple candidate actions from its
- * underlying model (for example, a native provider that ignores
- * parallel_tool_calls: false) is responsible for resolving that down to one
+ * underlying model (for example, a native provider that returns several
+ * tool calls in one response) is responsible for resolving that down to one
  * action itself, never for returning more than one and never for silently
  * discarding extras.
  */

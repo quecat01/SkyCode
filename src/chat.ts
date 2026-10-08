@@ -824,11 +824,38 @@ function extractNativeCompletionResult(
   };
 }
 
+/*
+ * Why native requests send neither `tool_choice` nor `parallel_tool_calls`
+ * (applies to requestNativeToolCompletion() and streamNativeToolCompletion()
+ * alike, kept here so the rationale has one home):
+ *
+ * - `parallel_tool_calls` is not supported by every backend behind the
+ *   LiteLLM gateway. LiteLLM's `ollama_chat` backend (serving
+ *   gemma4-e4b-sky) rejects it with HTTP 400 UnsupportedParamsError before
+ *   the model ever runs, observed in Sky Code's first live native
+ *   acceptance test. Sky Code does not depend on it anyway: NativeStrategy
+ *   enforces one action per step itself, executing nothing from a response
+ *   with more than one call and asking the model again (see
+ *   agent/strategies/native.ts). NativeCompletionRequest.parallelToolCalls
+ *   still records that intent inside Sky Code; it is simply not put on the
+ *   wire, so a provider-specific override could send it later if one ever
+ *   demonstrably needs it.
+ * - `tool_choice: "auto"` is already the default whenever `tools` is
+ *   supplied, so sending it changes nothing while adding one more field a
+ *   backend could reject.
+ *
+ * This matches the request shape AnythingLLM's native agent path uses
+ * successfully through the same gateway with the same models.
+ */
+
 /**
  * Sends one non-streaming chat-completion request using the endpoint's
- * native tool-calling protocol (OpenAI-compatible `tools`/`tool_choice`/
- * `parallel_tool_calls`) and returns the model's chosen tool call(s), if
- * any, plus any plain text content.
+ * native tool-calling protocol (OpenAI-compatible `tools`) and returns the
+ * model's chosen tool call(s), if any, plus any plain text content.
+ *
+ * The request carries only `model`, `stream`, `messages`, and `tools`.
+ * `tool_choice` and `parallel_tool_calls` are deliberately not sent (see the
+ * note directly above this function for why).
  *
  * Deliberately non-streaming, unlike streamChatCompletion(): reassembling
  * tool-call argument fragments that can arrive split across streamed
@@ -850,8 +877,6 @@ function extractNativeCompletionResult(
  * prior assistant tool-call records and "tool" result turns.
  * @param {ChatToolDefinition[]} tools - Native tool definitions offered to
  * the model.
- * @param {boolean} parallelToolCalls - Sent as the request's
- * `parallel_tool_calls` field.
  * @returns {Promise<NativeChatCompletionResult>} The model's response,
  * unvalidated beyond basic structural shape (see NativeStrategy for
  * argument/compliance validation).
@@ -867,7 +892,6 @@ export async function requestNativeToolCompletion(
   systemPrompt: string,
   messages: NativeChatMessage[],
   tools: ChatToolDefinition[],
-  parallelToolCalls: boolean,
 ): Promise<NativeChatCompletionResult> {
   const apiUrl =
     removeTrailingSlashes(
@@ -899,9 +923,6 @@ export async function requestNativeToolCompletion(
             ...messages,
           ],
           tools,
-          tool_choice: "auto",
-          parallel_tool_calls:
-            parallelToolCalls,
         }),
       },
     );
@@ -929,8 +950,9 @@ export async function requestNativeToolCompletion(
  * Sends one streamed chat-completion request using the endpoint's native
  * tool-calling protocol and assembles the result once the stream ends.
  *
- * Sends the same request body as requestNativeToolCompletion() (tools,
- * `tool_choice: "auto"`, `parallel_tool_calls`) with `stream: true`. Every
+ * Sends the same request body as requestNativeToolCompletion() (`model`,
+ * `messages`, `tools`; no `tool_choice` or `parallel_tool_calls`, see the note
+ * above requestNativeToolCompletion()) with `stream: true`. Every
  * SSE `data:` chunk is handed to a NativeToolCallStreamAssembler
  * (native-tool-stream.ts), which accumulates content and
  * `delta.tool_calls` fragments by index. Nothing is returned, and so nothing
@@ -957,8 +979,6 @@ export async function requestNativeToolCompletion(
  * prior assistant tool-call records and "tool" result turns.
  * @param {ChatToolDefinition[]} tools - Native tool definitions offered to
  * the model.
- * @param {boolean} parallelToolCalls - Sent as the request's
- * `parallel_tool_calls` field.
  * @param {NativeToolCallStreamAssemblerOptions} [assemblerOptions] -
  * Optional assembler dependencies (tests inject a deterministic ID
  * generator).
@@ -976,7 +996,6 @@ export async function streamNativeToolCompletion(
   systemPrompt: string,
   messages: NativeChatMessage[],
   tools: ChatToolDefinition[],
-  parallelToolCalls: boolean,
   assemblerOptions?: NativeToolCallStreamAssemblerOptions,
 ): Promise<NativeChatCompletionResult> {
   const apiUrl =
@@ -1009,9 +1028,6 @@ export async function streamNativeToolCompletion(
             ...messages,
           ],
           tools,
-          tool_choice: "auto",
-          parallel_tool_calls:
-            parallelToolCalls,
         }),
       },
     );
