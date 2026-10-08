@@ -87,6 +87,7 @@ export class NativeFirstStrategy implements ToolCallStrategy {
     tools: ToolDefinition[],
     model: string,
     onDiagnostic?: DiagnosticReporter,
+    signal?: AbortSignal,
   ): Promise<AgentAction> {
     const known =
       this.cache.get(
@@ -113,6 +114,7 @@ export class NativeFirstStrategy implements ToolCallStrategy {
         tools,
         model,
         onDiagnostic,
+        signal,
       );
     }
 
@@ -122,6 +124,7 @@ export class NativeFirstStrategy implements ToolCallStrategy {
         tools,
         model,
         onDiagnostic,
+        signal,
       );
     } catch (error) {
       if (
@@ -152,6 +155,7 @@ export class NativeFirstStrategy implements ToolCallStrategy {
         tools,
         model,
         onDiagnostic,
+        signal,
       );
     }
   }

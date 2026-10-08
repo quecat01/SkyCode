@@ -19,6 +19,7 @@
  *   succeeded; only executor.execute()'s actual return value is.
  */
 import type {
+  AgentAction,
   AgentContext,
   AgentEvent,
   AgentToolResult,
@@ -38,6 +39,10 @@ import {
   describeBlockedRepeat,
   RepeatGuard,
 } from "./repeat-guard.js";
+
+import {
+  isTurnCancellation,
+} from "./cancellation.js";
 
 import type {
   PlainConversationTurn,
@@ -87,6 +92,11 @@ export type AgentEventListener =
  * fallback; see AgentAction in types.ts).
  * @param {AgentEventListener} [onEvent] - Optional listener invoked once for
  * every event, in order, as it is recorded.
+ * @param {AbortSignal} [signal] - The turn's cancellation signal (see
+ * cancellation.ts). Once aborted, the loop makes no further model request
+ * and starts no further tool; a tool already running finishes and its real
+ * result is recorded, then the turn ends with a "cancelled" outcome. A
+ * cancellation is never recorded as a tool failure.
  * @returns {Promise<AgentTurnOutcome>} Either the final user-facing answer
  * text, or a real tool result that ended the turn early without one (see
  * AgentTurnOutcome and AgentToolResult.endsTurn in types.ts).
@@ -109,6 +119,7 @@ export async function runAgentLoop(
   executor: ToolExecutor,
   finalAnswerProducer: FinalAnswerProducer,
   onEvent?: AgentEventListener,
+  signal?: AbortSignal,
 ): Promise<AgentTurnOutcome> {
   const context: AgentContext = {
     priorTurns,
@@ -146,18 +157,64 @@ export async function runAgentLoop(
       });
     };
 
+  // Ends the turn as cancelled. Reported on the diagnostic channel (session
+  // log) only; nothing is added to history and no final answer is
+  // fabricated.
+  const endCancelled = (
+    when: string,
+  ): AgentTurnOutcome => {
+    reportDiagnostic(
+      `Turn cancelled by the user ${when}.`,
+    );
+
+    return {
+      kind: "cancelled",
+    };
+  };
+
   for (
     let step = 0;
     step < MAX_AGENT_STEPS;
     step += 1
   ) {
-    const action =
-      await strategy.getNextAction(
-        context,
-        tools,
-        model,
-        reportDiagnostic,
+    if (signal?.aborted) {
+      return endCancelled(
+        "before the next model request",
       );
+    }
+
+    let action: AgentAction;
+
+    try {
+      action =
+        await strategy.getNextAction(
+          context,
+          tools,
+          model,
+          reportDiagnostic,
+          signal,
+        );
+    } catch (error) {
+      if (
+        isTurnCancellation(
+          error,
+          signal,
+        )
+      ) {
+        return endCancelled(
+          "during a model request",
+        );
+      }
+
+      throw error;
+    }
+
+    // A response that arrived after Ctrl+C is never acted on.
+    if (signal?.aborted) {
+      return endCancelled(
+        "before acting on the model's response",
+      );
+    }
 
     if (action.kind === "final_answer") {
       // The strategy's own completion already produced the reply (Native,
@@ -187,10 +244,28 @@ export async function runAgentLoop(
       // produces the user-facing text, grounded in the same full context
       // (prior session turns, goal, and this turn's real recorded history)
       // rather than anything the strategy's own call said.
-      const text =
-        await finalAnswerProducer.produce(
-          context,
-        );
+      let text: string;
+
+      try {
+        text =
+          await finalAnswerProducer.produce(
+            context,
+            signal,
+          );
+      } catch (error) {
+        if (
+          isTurnCancellation(
+            error,
+            signal,
+          )
+        ) {
+          return endCancelled(
+            "while the final answer was being written",
+          );
+        }
+
+        throw error;
+      }
 
       record({
         type: "final_answer",
@@ -272,8 +347,31 @@ export async function runAgentLoop(
         await executor.execute(
           action.tool,
           action.arguments,
+          signal,
         );
     } catch (error) {
+      // Cancellation before the tool started (the executor refused to start
+      // it, or Ctrl+C was pressed inside its approval prompt) is not a tool
+      // failure: the call is marked interrupted, with no tool_result, and
+      // the turn ends. Classified by the error alone, never by the signal,
+      // so a tool that genuinely failed on its own is still recorded as a
+      // failure.
+      if (
+        isTurnCancellation(
+          error,
+        )
+      ) {
+        record({
+          type: "tool_state_changed",
+          callId,
+          state: "interrupted",
+        });
+
+        return endCancelled(
+          `before "${action.tool}" started`,
+        );
+      }
+
       // A thrown executor error is still a real outcome, just one the
       // executor failed to convert into a normal {success:false} result
       // itself. Recording it as a failed result, rather than letting the
@@ -315,6 +413,14 @@ export async function runAgentLoop(
       result.success,
       result.output,
     );
+
+    // Ctrl+C while the tool was running: it was allowed to finish and its
+    // real result is recorded above, but the model is never called again.
+    if (signal?.aborted) {
+      return endCancelled(
+        `after "${action.tool}" finished running`,
+      );
+    }
 
     if (result.endsTurn === true) {
       // The real, already-recorded tool result marks this turn as over

@@ -47,6 +47,10 @@ import {
   validateSkyToolRequest,
 } from "../../tools.js";
 
+import {
+  throwIfCancelled,
+} from "../cancellation.js";
+
 import type {
   PlainConversationTurn,
   TextCompletionClient,
@@ -279,6 +283,7 @@ export class PromptedStrategy implements ToolCallStrategy {
     tools: ToolDefinition[],
     model: string,
     onDiagnostic?: DiagnosticReporter,
+    signal?: AbortSignal,
   ): Promise<AgentAction> {
     const systemPrompt =
       buildSelectionSystemPrompt(
@@ -297,6 +302,12 @@ export class PromptedStrategy implements ToolCallStrategy {
       attempt <= MAX_CORRECTIVE_ATTEMPTS;
       attempt += 1
     ) {
+      // A cancelled turn makes no further requests, including corrective
+      // retries (see cancellation.ts).
+      throwIfCancelled(
+        signal,
+      );
+
       const rawResponse =
         await this.client.complete(
           model,
@@ -307,6 +318,11 @@ export class PromptedStrategy implements ToolCallStrategy {
           ],
           {
             jsonMode: true,
+            ...(signal
+              ? {
+                  signal,
+                }
+              : {}),
           },
         );
 

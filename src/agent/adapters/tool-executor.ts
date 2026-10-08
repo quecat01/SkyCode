@@ -53,6 +53,10 @@ import {
   restoreReadlineRawMode,
 } from "../../readline-redraw.js";
 
+import {
+  throwIfCancelled,
+} from "../cancellation.js";
+
 import type {
   HookRegistry,
 } from "../../hooks.js";
@@ -106,7 +110,15 @@ export function createLiveToolExecutor(
     async execute(
       tool,
       args,
+      signal,
     ): Promise<AgentToolResult> {
+      // Never start a tool (or its approval prompt) once the turn has been
+      // cancelled. A tool that has already started is not interrupted: it
+      // finishes, so nothing is left half-done (see agent/cancellation.ts).
+      throwIfCancelled(
+        signal,
+      );
+
       // Defensive re-validation: NativeStrategy and PromptedStrategy already
       // validate before ever forming a tool_call AgentAction (see
       // agent/strategies/native.ts and prompted.ts), and LegacyStrategy's

@@ -278,6 +278,9 @@ export interface AgentToolResult {
  *   outcome, and none is fabricated to stand in for it. A caller that wants
  *   to show the user something uses `result.output` directly, exactly as
  *   Sky Code's existing background-tool handling already does.
+ * - cancelled: the user cancelled the turn (see cancellation.ts). Nothing
+ *   further was requested from the model or started as a tool; there is no
+ *   final answer, and none is fabricated.
  */
 export type AgentTurnOutcome =
   | {
@@ -288,6 +291,9 @@ export type AgentTurnOutcome =
   | {
       kind: "return_to_prompt";
       result: AgentToolResult;
+    }
+  | {
+      kind: "cancelled";
     };
 
 /**
@@ -325,9 +331,18 @@ export function deriveCallState(
  * or real tool side effects.
  */
 export interface ToolExecutor {
+  /**
+   * @param {string} tool - Tool name.
+   * @param {unknown} args - Tool arguments.
+   * @param {AbortSignal} [signal] - The turn's cancellation signal (see
+   * cancellation.ts). An implementation must not start a tool once it is
+   * aborted (throw TurnCancelledError instead); a tool already running is
+   * allowed to finish.
+   */
   execute(
     tool: string,
     args: unknown,
+    signal?: AbortSignal,
   ): Promise<AgentToolResult>;
 }
 
@@ -362,8 +377,14 @@ export interface ToolExecutor {
  * interface.
  */
 export interface FinalAnswerProducer {
+  /**
+   * @param {AgentContext} context - Full turn context.
+   * @param {AbortSignal} [signal] - The turn's cancellation signal; aborts
+   * the underlying model request.
+   */
   produce(
     context: AgentContext,
+    signal?: AbortSignal,
   ): Promise<string>;
 }
 
@@ -402,10 +423,21 @@ export type DiagnosticReporter =
  * discarding extras.
  */
 export interface ToolCallStrategy {
+  /**
+   * @param {AgentContext} context - Full turn context.
+   * @param {ToolDefinition[]} tools - Tools available this turn.
+   * @param {string} model - Active model.
+   * @param {DiagnosticReporter} [onDiagnostic] - Diagnostic channel.
+   * @param {AbortSignal} [signal] - The turn's cancellation signal (see
+   * cancellation.ts). Implementations pass it to every model request they
+   * make, including corrective retries, and stop retrying once it is
+   * aborted.
+   */
   getNextAction(
     context: AgentContext,
     tools: ToolDefinition[],
     model: string,
     onDiagnostic?: DiagnosticReporter,
+    signal?: AbortSignal,
   ): Promise<AgentAction>;
 }

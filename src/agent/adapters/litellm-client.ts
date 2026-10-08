@@ -162,6 +162,7 @@ export function createLiteLLMTextCompletionClient(
         options?.jsonMode
           ? "json_object"
           : undefined,
+        options?.signal,
       );
     },
   };
@@ -203,21 +204,27 @@ export function createLiteLLMNativeCompletionClient(
           buildNativeChatMessage,
         );
 
-      const send =
+      const result =
         resolveTransport(
           request.model,
         ) === "streaming"
-          ? streamNativeToolCompletion
-          : requestNativeToolCompletion;
-
-      const result =
-        await send(
-          config,
-          request.model,
-          request.systemPrompt,
-          messages,
-          tools,
-        );
+          ? await streamNativeToolCompletion(
+              config,
+              request.model,
+              request.systemPrompt,
+              messages,
+              tools,
+              undefined,
+              request.signal,
+            )
+          : await requestNativeToolCompletion(
+              config,
+              request.model,
+              request.systemPrompt,
+              messages,
+              tools,
+              request.signal,
+            );
 
       return {
         content: result.content,

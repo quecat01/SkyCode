@@ -1674,6 +1674,10 @@ async function compactCurrentContext(
  * @param {FinalAnswerProducer} finalAnswerProducer - Produces the
  * user-facing reply when the active strategy signals "done" without
  * itself writing that text (see buildFinalAnswerProducer() above).
+ * @param {AbortSignal} [signal] - This turn's cancellation signal (Ctrl+C;
+ * see agent/cancellation.ts). A cancelled turn returns without a final
+ * answer and removes the cancelled input from live model history; the
+ * session log keeps everything that actually happened.
  * @returns {Promise<void>} Resolves once control should return to the user.
  * @throws {Error} If a model request, tool execution, or session logging
  * fails, or the turn exceeds the agent loop's own step bound (see
@@ -1691,6 +1695,7 @@ export async function completeConversationTurn(
   tools: ToolDefinition[],
   executor: ToolExecutor,
   finalAnswerProducer: FinalAnswerProducer,
+  signal?: AbortSignal,
 ): Promise<void> {
   const currentTurn =
     messages.at(-1);
@@ -1791,7 +1796,30 @@ export async function completeConversationTurn(
             }
           }
         },
+        signal,
       );
+
+    if (outcome.kind === "cancelled") {
+      // No final answer exists and none is fabricated. The cancelled input
+      // is removed from live model history, matching the model-request
+      // error path in runCli(), so the next turn does not inherit a request
+      // that was never answered; the session log still records the input
+      // and every event that actually happened.
+      if (
+        messages.at(-1)?.role ===
+          "user" &&
+        messages.at(-1)?.content ===
+          goal
+      ) {
+        messages.pop();
+      }
+
+      output.write(
+        "\nTurn cancelled.\n\n",
+      );
+
+      return;
+    }
 
     if (outcome.kind === "final_answer") {
       messages.push({
@@ -2837,6 +2865,18 @@ export async function runCli():
   let shutdownRequested =
     false;
 
+  // The conversation turn currently running, if any: its cancellation
+  // controller, plus a promise that settles once the turn has fully stopped.
+  // Ctrl+C during a turn cancels it (see handleInterrupt() below), and
+  // shutdown waits for it to settle before writing session_end, so no agent
+  // event can ever be recorded after the session has ended.
+  let activeTurn:
+    {
+      controller: AbortController;
+      settled: Promise<void>;
+    } | null =
+    null;
+
   let sessionEndPromise:
     Promise<void> | null =
     null;
@@ -2916,6 +2956,15 @@ export async function runCli():
     // The signal callback itself remains synchronous while the asynchronous
     // cleanup sequence runs in a deliberately detached promise.
     void (async () => {
+      // Stop any turn still running and wait until it has fully stopped
+      // (a tool already running finishes first) before finalizing the
+      // session, so nothing is recorded after session_end.
+      if (activeTurn) {
+        activeTurn.controller.abort();
+
+        await activeTurn.settled;
+      }
+
       try {
         await backgroundTaskRegistry
           .cancelAll(
@@ -2959,16 +3008,48 @@ export async function runCli():
     })();
   }
 
+  /**
+   * Handles Ctrl+C.
+   *
+   * While a turn is running, the first Ctrl+C cancels that turn and returns
+   * to the prompt: in-flight model requests are aborted, no new tool is
+   * started, and a tool already running is allowed to finish (see
+   * agent/cancellation.ts). At an idle prompt, or on a second Ctrl+C while a
+   * cancellation is still finishing, Sky Code shuts down as before.
+   *
+   * @returns {void} Nothing.
+   *
+   * Side effects: aborts the active turn or starts shutdown, and writes a
+   * short notice to the terminal.
+   */
+  function handleInterrupt():
+    void {
+    if (
+      activeTurn &&
+      !activeTurn.controller.signal.aborted
+    ) {
+      activeTurn.controller.abort();
+
+      output.write(
+        "\nCancelling... (a tool that is already running finishes first; press Ctrl+C again to exit)\n",
+      );
+
+      return;
+    }
+
+    requestShutdown();
+  }
+
   // Handle Ctrl+C originating through either readline or the process itself.
-  // requestShutdown() is idempotent, so both paths can safely point to it.
+  // handleInterrupt() is safe to reach through both paths.
   readline.on(
     "SIGINT",
-    requestShutdown,
+    handleInterrupt,
   );
 
   process.on(
     "SIGINT",
-    requestShutdown,
+    handleInterrupt,
   );
 
   // Display the effective runtime state after all startup components have
@@ -3603,6 +3684,25 @@ export async function runCli():
         RESPONSE_LABEL,
       );
 
+      const turnController =
+        new AbortController();
+
+      let markTurnSettled:
+        () => void =
+        () => {};
+
+      activeTurn = {
+        controller:
+          turnController,
+        settled:
+          new Promise<void>(
+            (resolve) => {
+              markTurnSettled =
+                resolve;
+            },
+          ),
+      };
+
       try {
         await completeConversationTurn(
           activeModel,
@@ -3612,6 +3712,7 @@ export async function runCli():
           tools,
           executor,
           finalAnswerProducer,
+          turnController.signal,
         );
       } catch (error) {
         output.write(
@@ -3647,6 +3748,13 @@ export async function runCli():
           messages.pop();
         }
       } finally {
+        // The turn has fully stopped: nothing it started is still running,
+        // so a pending shutdown may now finalize the session.
+        activeTurn =
+          null;
+
+        markTurnSettled();
+
         assistantOutputActive =
           false;
 
@@ -3662,7 +3770,7 @@ export async function runCli():
     // are closed even if requestShutdown() was never invoked.
     process.off(
       "SIGINT",
-      requestShutdown,
+      handleInterrupt,
     );
 
     promptActive =

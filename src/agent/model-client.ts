@@ -51,6 +51,11 @@ export interface TextCompletionOptions {
    * be exactly one JSON object.
    */
   jsonMode?: boolean;
+  /**
+   * The turn's cancellation signal (see cancellation.ts); aborts the
+   * underlying HTTP request when the user cancels.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -157,6 +162,11 @@ export interface NativeCompletionRequest {
    * provider ever demonstrably needs the wire field.
    */
   parallelToolCalls: boolean;
+  /**
+   * The turn's cancellation signal (see cancellation.ts); aborts the
+   * underlying HTTP request when the user cancels.
+   */
+  signal?: AbortSignal;
 }
 
 /**

@@ -57,6 +57,10 @@ import {
 } from "../final-answer-safety.js";
 
 import {
+  throwIfCancelled,
+} from "../cancellation.js";
+
+import {
   validateSkyToolRequest,
 } from "../../tools.js";
 
@@ -437,6 +441,7 @@ export class NativeStrategy implements ToolCallStrategy {
     tools: ToolDefinition[],
     model: string,
     onDiagnostic?: DiagnosticReporter,
+    signal?: AbortSignal,
   ): Promise<AgentAction> {
     let offeredTools =
       tools;
@@ -491,6 +496,12 @@ export class NativeStrategy implements ToolCallStrategy {
       attempt <= MAX_CORRECTIVE_ATTEMPTS;
       attempt += 1
     ) {
+      // A cancelled turn makes no further requests, including corrective
+      // retries (see cancellation.ts).
+      throwIfCancelled(
+        signal,
+      );
+
       const request: NativeCompletionRequest = {
         model,
         systemPrompt: this.systemPrompt,
@@ -500,6 +511,13 @@ export class NativeStrategy implements ToolCallStrategy {
         ],
         tools: offeredTools,
         parallelToolCalls: false,
+        // Only present when a turn has one, so a request without it keeps
+        // exactly the shape it always had.
+        ...(signal
+          ? {
+              signal,
+            }
+          : {}),
       };
 
       const result =

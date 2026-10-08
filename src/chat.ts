@@ -347,6 +347,8 @@ export async function fetchAvailableModels(
  * Added for PromptedStrategy's tool-selection calls (see
  * agent/adapters/litellm-client.ts); omitted by every existing caller, so
  * this has no effect unless a caller opts in.
+ * @param {AbortSignal} [signal] - Aborts the request (and stops reading the
+ * stream) when the user cancels the turn; see agent/cancellation.ts.
  * @returns {Promise<string>} Complete assistant text assembled from every
  * streamed content fragment.
  * @throws {Error} If the HTTP response is unsuccessful, has no stream body, or
@@ -365,6 +367,7 @@ export async function streamChatCompletion(
   systemPrompt: string =
     SKY_CODE_SYSTEM_PROMPT,
   responseFormat?: "json_object",
+  signal?: AbortSignal,
 ): Promise<string> {
   const apiUrl =
     removeTrailingSlashes(
@@ -384,6 +387,7 @@ export async function streamChatCompletion(
           Accept:
             "text/event-stream",
         },
+        signal,
         body: JSON.stringify({
           model,
           stream: true,
@@ -914,6 +918,8 @@ export class NativeRequestHttpError extends Error {
  * prior assistant tool-call records and "tool" result turns.
  * @param {ChatToolDefinition[]} tools - Native tool definitions offered to
  * the model.
+ * @param {AbortSignal} [signal] - Aborts the request when the user cancels
+ * the turn; see agent/cancellation.ts.
  * @returns {Promise<NativeChatCompletionResult>} The model's response,
  * unvalidated beyond basic structural shape (see NativeStrategy for
  * argument/compliance validation).
@@ -930,6 +936,7 @@ export async function requestNativeToolCompletion(
   systemPrompt: string,
   messages: NativeChatMessage[],
   tools: ChatToolDefinition[],
+  signal?: AbortSignal,
 ): Promise<NativeChatCompletionResult> {
   const apiUrl =
     removeTrailingSlashes(
@@ -949,6 +956,7 @@ export async function requestNativeToolCompletion(
           Accept:
             "application/json",
         },
+        signal,
         body: JSON.stringify({
           model,
           stream: false,
@@ -1021,6 +1029,8 @@ export async function requestNativeToolCompletion(
  * @param {NativeToolCallStreamAssemblerOptions} [assemblerOptions] -
  * Optional assembler dependencies (tests inject a deterministic ID
  * generator).
+ * @param {AbortSignal} [signal] - Aborts the request (and stops reading the
+ * stream) when the user cancels the turn; see agent/cancellation.ts.
  * @returns {Promise<NativeChatCompletionResult>} The assembled response,
  * including any protocol issues/notes found during assembly.
  * @throws {NativeRequestHttpError} If the HTTP response is unsuccessful.
@@ -1037,6 +1047,7 @@ export async function streamNativeToolCompletion(
   messages: NativeChatMessage[],
   tools: ChatToolDefinition[],
   assemblerOptions?: NativeToolCallStreamAssemblerOptions,
+  signal?: AbortSignal,
 ): Promise<NativeChatCompletionResult> {
   const apiUrl =
     removeTrailingSlashes(
@@ -1056,6 +1067,7 @@ export async function streamNativeToolCompletion(
           Accept:
             "text/event-stream",
         },
+        signal,
         body: JSON.stringify({
           model,
           stream: true,

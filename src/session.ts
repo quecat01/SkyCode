@@ -216,9 +216,14 @@ export interface SessionLogger {
   /**
    * Queues one event for persistent JSONL storage.
    *
+   * Once a session_end record has been queued, every later record is
+   * dropped without being written, so the session log can never contain
+   * anything after session_end.
+   *
    * @param {SessionRecordInput} record - Event-specific data excluding the
    * logger-owned timestamp and session ID.
-   * @returns {Promise<void>} Resolves after the queued record is appended.
+   * @returns {Promise<void>} Resolves after the queued record is appended
+   * (or immediately, for a record dropped after session_end).
    *
    * Side effect: appends one UTF-8 JSON line to the session log.
    */
@@ -299,6 +304,12 @@ export async function createSessionLogger(
     Promise<void> =
       Promise.resolve();
 
+  // Set once a session_end record has been queued. Every later append is
+  // dropped, so nothing (a late agent event, a stray message) can ever be
+  // recorded after the session has ended, whatever code path tries.
+  let ended =
+    false;
+
   /**
    * Adds logger-owned metadata and queues one JSONL record for disk storage.
    *
@@ -319,6 +330,17 @@ export async function createSessionLogger(
     record:
       SessionRecordInput,
   ): Promise<void> {
+    if (ended) {
+      return writeQueue;
+    }
+
+    if (
+      record.type ===
+      "session_end"
+    ) {
+      ended = true;
+    }
+
     // Assign timestamp and session identity at append time so callers only
     // provide fields specific to the event being recorded.
     const completeRecord:

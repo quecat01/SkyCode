@@ -58,6 +58,7 @@ export function createFinalAnswerProducer(
   return {
     async produce(
       context: AgentContext,
+      signal?: AbortSignal,
     ): Promise<string> {
       const turns: PlainConversationTurn[] =
         renderContextAsPlainTurns(
@@ -68,6 +69,11 @@ export function createFinalAnswerProducer(
         model,
         systemPrompt,
         turns,
+        signal
+          ? {
+              signal,
+            }
+          : undefined,
       );
     },
   };
