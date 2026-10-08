@@ -89,6 +89,11 @@ import {
 } from "./agent/native-support.js";
 
 import {
+  withNativeActivityIndicator,
+  withTextActivityIndicator,
+} from "./agent/adapters/activity-indicator.js";
+
+import {
   NativeFirstStrategy,
 } from "./agent/strategies/native-first.js";
 
@@ -927,8 +932,9 @@ interface NativeRuntime {
  * @param {TextCompletionClient} visibleTextClient - Streams live to the
  * terminal; used for LegacyStrategy (see createVisibleTextCompletionClient()
  * above).
- * @param {TextCompletionClient} silentTextClient - Never streams to the
- * terminal; used for PromptedStrategy, whose completions are narrow JSON
+ * @param {TextCompletionClient} silentTextClient - Never streams its text
+ * to the terminal (only the "Thinking..." indicator while a request is in
+ * flight); used for PromptedStrategy, whose completions are narrow JSON
  * selections the user should never see.
  * @param {NativeRuntime} nativeRuntime - The native completion client plus
  * the session's native-support cache and endpoint, used for the default
@@ -2616,18 +2622,31 @@ export async function runCli():
       config,
     );
 
+  // Never writes the selection text it receives, but shows the same
+  // "Thinking..." indicator as the visible client while each request is in
+  // flight, so a PromptedStrategy step is never a blank wait (see
+  // agent/adapters/activity-indicator.ts).
   const silentTextClient =
-    createLiteLLMTextCompletionClient(
-      config,
+    withTextActivityIndicator(
+      createLiteLLMTextCompletionClient(
+        config,
+      ),
+      startThinkingIndicator,
     );
 
   // Streamed or non-streaming per model (resolveNativeTransport(),
   // agent/strategy-selection.ts), decided per request so a /model switch
-  // needs no client rebuild.
+  // needs no client rebuild. Like the silent client above, it shows the
+  // "Thinking..." indicator during each request: its text is only displayed
+  // after NativeStrategy's final-answer check, so without the indicator every
+  // native step would be a blank wait.
   const nativeClient =
-    createLiteLLMNativeCompletionClient(
-      config,
-      resolveNativeTransport,
+    withNativeActivityIndicator(
+      createLiteLLMNativeCompletionClient(
+        config,
+        resolveNativeTransport,
+      ),
+      startThinkingIndicator,
     );
 
   // One per process: remembers endpoint + model combinations that refused
