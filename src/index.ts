@@ -1777,7 +1777,10 @@ export async function completeConversationTurn(
             // another failure of the tool itself.
             if (event.notExecuted) {
               console.log(
-                `Tool skipped: ${toolName} (the identical call already failed repeatedly this turn)`,
+                event.notExecutedReason ===
+                  "invalid_arguments"
+                  ? `Tool call rejected: ${toolName} (invalid arguments; not run)`
+                  : `Tool skipped: ${toolName} (the identical call already failed repeatedly this turn)`,
               );
 
               return;

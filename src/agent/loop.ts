@@ -50,6 +50,7 @@ import {
 
 import {
   buildExecutionLedger,
+  buildLedgerStopAnswer,
   buildRepeatStopAnswer,
 } from "./execution-ledger.js";
 
@@ -71,6 +72,16 @@ import type {
  * forever.
  */
 const MAX_AGENT_STEPS = 20;
+
+/**
+ * How many times, within one turn, the model may correct a rejected call to
+ * the same tool (arguments that were not valid JSON or failed the schema)
+ * before the turn ends. With 2, the first and second rejections are answered
+ * with guidance; the third rejection for that tool ends the turn with a
+ * truthful account of everything recorded so far. A successful run of the
+ * tool resets its count.
+ */
+export const MAX_ARGUMENT_CORRECTIONS = 2;
 
 /**
  * Optional hook invoked once for every AgentEvent the loop records, in
@@ -144,6 +155,10 @@ export async function runAgentLoop(
   // failing the same way is not executed indefinitely (see repeat-guard.ts).
   const repeatGuard =
     new RepeatGuard();
+
+  // Rejected-argument calls per tool this turn (see MAX_ARGUMENT_CORRECTIONS).
+  const argumentRejections =
+    new Map<string, number>();
 
   // Centralizes every state mutation through one function so "history only
   // grows from recorded events, in order, with the listener kept in sync"
@@ -296,6 +311,83 @@ export async function runAgentLoop(
       };
     }
 
+    if (action.kind === "rejected_tool_call") {
+      // The tool never runs. The call is still recorded under the model's
+      // own call ID and answered with concrete correction guidance, so native
+      // history stays canonical and the model can fix it on its next step.
+      record({
+        type: "tool_requested",
+        callId: action.callId,
+        tool: action.tool,
+        arguments: action.arguments,
+      });
+
+      record({
+        type: "tool_state_changed",
+        callId: action.callId,
+        state: "rejected",
+      });
+
+      record({
+        type: "tool_result",
+        callId: action.callId,
+        success: false,
+        verified: false,
+        output: action.guidance,
+        notExecuted: true,
+        notExecutedReason:
+          "invalid_arguments",
+        validationError:
+          action.validationError,
+        errorCode:
+          action.errorCode,
+        recoveryHint:
+          `Correct the arguments and call ${action.tool} again.`,
+      });
+
+      const rejections =
+        (argumentRejections.get(
+          action.tool,
+        ) ?? 0) + 1;
+
+      argumentRejections.set(
+        action.tool,
+        rejections,
+      );
+
+      if (
+        rejections >
+        MAX_ARGUMENT_CORRECTIONS
+      ) {
+        // The configured number of corrections has been used up for this
+        // tool. Everything done so far stays accurately reported.
+        const text =
+          buildLedgerStopAnswer(
+            buildExecutionLedger(
+              context.history,
+            ),
+            `the model repeatedly supplied invalid arguments for ${action.tool}, so it was never run`,
+          );
+
+        reportDiagnostic(
+          `Argument rejections for "${action.tool}" reached the limit (${rejections} rejected calls, ${MAX_ARGUMENT_CORRECTIONS} corrections allowed); ending the turn with the recorded results.`,
+        );
+
+        record({
+          type: "final_answer",
+          text,
+        });
+
+        return {
+          kind: "final_answer",
+          text,
+          alreadyDisplayed: false,
+        };
+      }
+
+      continue;
+    }
+
     // action.kind === "tool_call" from here on.
     const callId =
       action.callId;
@@ -335,6 +427,8 @@ export async function runAgentLoop(
             repeat,
           ),
         notExecuted: true,
+        notExecutedReason:
+          "repeat_blocked",
         // The original failure's safe recovery, carried forward unchanged
         // so the model is given the same concrete next step again.
         ...(repeat.recovery
@@ -508,6 +602,12 @@ export async function runAgentLoop(
       result.output,
       recovery,
     );
+
+    if (result.success) {
+      argumentRejections.delete(
+        action.tool,
+      );
+    }
 
     // Ctrl+C while the tool was running: it was allowed to finish and its
     // real result is recorded above, but the model is never called again.

@@ -470,8 +470,13 @@ describe(
         expect(correctionText).toContain(
           "1. create_docx (northbridge-summary.docx): succeeded; the tool's own check of its output passed.",
         );
+        // The malformed call is its own recorded step: rejected, never run,
+        // and kept distinct from the real execution failure after it.
         expect(correctionText).toContain(
-          "2. create_xlsx (northbridge-summary.xlsx): failed.",
+          "2. create_xlsx: rejected before running (invalid arguments).",
+        );
+        expect(correctionText).toContain(
+          "3. create_xlsx (northbridge-summary.xlsx): failed.",
         );
       },
     );
@@ -531,7 +536,10 @@ describe(
           "1. create_docx (northbridge-summary.docx): succeeded",
         );
         expect(answer).toContain(
-          "2. create_xlsx (northbridge-summary.xlsx): failed",
+          "2. create_xlsx: rejected before running (invalid arguments)",
+        );
+        expect(answer).toContain(
+          "3. create_xlsx (northbridge-summary.xlsx): failed",
         );
         expect(answer).not.toContain(
           "All DOCX attempts failed",

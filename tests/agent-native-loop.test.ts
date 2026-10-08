@@ -740,7 +740,7 @@ describe(
     );
 
     it(
-      "recovers from malformed native arguments within the bounded budget, echoing them safely",
+      "records malformed native arguments as a rejected call under the same call ID, then runs the corrected call",
       async () => {
         const client =
           scriptedNativeClient([
@@ -772,48 +772,74 @@ describe(
             ),
           ]);
 
-        await runNativeTurn(
+        const {
+          events,
+        } = await runNativeTurn(
           "Create a project status DOCX report for the Q3 launch.",
           client,
           executor,
         );
 
+        // Only the corrected call ran.
         expect(executor.calls).toHaveLength(1);
 
-        const corrective =
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "tool_state_changed" &&
+              event.callId === "call_bad",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            state: "rejected",
+          }),
+        ]);
+
+        const next =
           client.requests[1]!;
 
         // Echoed with "{}" so a gateway that parses arguments cannot reject
-        // the corrective request; the original text is still shown.
+        // the next request.
         expect(
           toolCallTurns(
-            corrective,
-          )[0]!.toolCalls![0]!.argumentsJson,
-        ).toBe("{}");
+            next,
+          )[0]!.toolCalls![0]!,
+        ).toMatchObject({
+          id: "call_bad",
+          argumentsJson: "{}",
+        });
 
-        const answer =
+        const rejected =
+          toolResultTurns(
+            next,
+          )[0]!;
+
+        expect(rejected.toolCallId).toBe(
+          "call_bad",
+        );
+
+        const envelope =
           JSON.parse(
-            toolResultTurns(
-              corrective,
-            )[0]!.content,
+            rejected.content,
           );
 
-        expect(answer.status).toBe(
+        expect(envelope.status).toBe(
           "not_executed",
         );
-        expect(
-          answer.arguments_received,
-        ).toBe(
-          '{"path":"status.docx","content":"unterminated',
+        expect(envelope.error_code).toBe(
+          "TOOL_ARGUMENTS_INVALID_JSON",
         );
-        expect(answer.error).toContain(
+        expect(envelope.output).toContain(
           "not valid JSON",
+        );
+        expect(envelope.output).toContain(
+          "Expected arguments",
         );
       },
     );
 
     it(
-      "throws once malformed calls exhaust the corrective budget, never executing any of them",
+      "ends the turn with a ledger answer once one tool's arguments are rejected past the correction cap, never executing it",
       async () => {
         const malformed: NativeCompletionResult = {
           content: null,
@@ -836,18 +862,34 @@ describe(
         const executor =
           scriptedExecutor([]);
 
-        await expect(
-          runNativeTurn(
-            "Create a project status DOCX report for the Q3 launch.",
-            client,
-            executor,
-          ),
-        ).rejects.toThrow(
-          "could not obtain one compliant action",
+        const {
+          outcome,
+        } = await runNativeTurn(
+          "Create a project status DOCX report for the Q3 launch.",
+          client,
+          executor,
         );
 
         expect(executor.calls).toHaveLength(0);
         expect(client.requests).toHaveLength(3);
+        expect(outcome).toMatchObject({
+          kind: "final_answer",
+        });
+
+        const answer =
+          outcome.kind === "final_answer"
+            ? outcome.text
+            : "";
+
+        expect(answer).toContain(
+          "the model repeatedly supplied invalid arguments for create_docx, so it was never run",
+        );
+        expect(answer).toContain(
+          "rejected before running (invalid arguments)",
+        );
+        expect(answer).not.toContain(
+          "succeeded",
+        );
       },
     );
 

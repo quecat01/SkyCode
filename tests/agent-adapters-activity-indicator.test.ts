@@ -260,11 +260,18 @@ describe(
         const script: NativeCompletionResult[] = [
           {
             content: null,
+            // Two calls in one response: none runs, and NativeStrategy
+            // asks again (a corrective retry).
             toolCalls: [
               {
-                id: "bad",
+                id: "a",
                 name: "write_file",
-                argumentsJson: "{",
+                argumentsJson: "{}",
+              },
+              {
+                id: "b",
+                name: "write_file",
+                argumentsJson: "{}",
               },
             ],
           },

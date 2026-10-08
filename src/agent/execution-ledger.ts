@@ -48,9 +48,17 @@ export interface LedgerEntry {
   tool: string;
   /** The call's `path` or `url` argument, when it has one. */
   target?: string;
+  /**
+   * - succeeded / failed: the tool ran (an execution failure is "failed").
+   * - rejected: its arguments were refused before running (a validation
+   *   failure: the tool never ran).
+   * - not_executed: the repeated-action breaker did not run it again.
+   * - interrupted: it never completed (cancelled, or no result recorded).
+   */
   status:
     | "succeeded"
     | "failed"
+    | "rejected"
     | "not_executed"
     | "interrupted";
   /** The tool's own post-condition check passed (never "goal met"). */
@@ -126,15 +134,24 @@ export function buildExecutionLedger(
 
       entry.status =
         event.notExecuted
-          ? "not_executed"
+          ? event.notExecutedReason ===
+            "invalid_arguments"
+            ? "rejected"
+            : "not_executed"
           : event.success
             ? "succeeded"
             : "failed";
       entry.verified =
         event.success &&
         event.verified;
+      // A rejected call's own result text is long correction guidance; the
+      // ledger keeps just the validation error, which is what happened.
       entry.output =
-        event.output;
+        event.notExecutedReason ===
+          "invalid_arguments" &&
+        event.validationError !== undefined
+          ? event.validationError
+          : event.output;
 
       const recovery =
         event.notExecuted
@@ -183,9 +200,11 @@ export function renderExecutionLedger(
               : "succeeded"
             : entry.status === "failed"
               ? "failed"
-              : entry.status === "not_executed"
-                ? "not executed (identical call had already failed)"
-                : "did not complete (interrupted)";
+              : entry.status === "rejected"
+                ? "rejected before running (invalid arguments)"
+                : entry.status === "not_executed"
+                  ? "not executed (identical call had already failed)"
+                  : "did not complete (interrupted)";
 
         const firstLine =
           entry.output
@@ -598,4 +617,32 @@ export function buildRepeatStopAnswer(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Builds the deterministic final answer used when a turn has to stop before
+ * the model produced a usable answer (for example, it kept supplying
+ * invalid arguments, or its responses could not be used at all).
+ *
+ * Everything already done this turn is reported exactly as recorded, so
+ * completed work is never lost behind a generic error.
+ *
+ * @param {readonly LedgerEntry[]} entries - This turn's ledger.
+ * @param {string} reason - Why the turn stopped, completing the sentence
+ * "I stopped because ...".
+ * @returns {string} A plain account of what was recorded.
+ *
+ * Side effects: none.
+ */
+export function buildLedgerStopAnswer(
+  entries: readonly LedgerEntry[],
+  reason: string,
+): string {
+  return [
+    `I stopped because ${reason}. Here is the recorded result of each step this turn:`,
+    "",
+    renderExecutionLedger(
+      entries,
+    ),
+  ].join("\n");
 }

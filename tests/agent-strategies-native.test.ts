@@ -225,7 +225,7 @@ describe(
     );
 
     it(
-      "treats malformed argument JSON as non-compliant and retries",
+      "returns malformed argument JSON as a rejected call (nothing executed), with concrete guidance, instead of correcting it privately",
       async () => {
         const client = scriptedNativeClient([
           {
@@ -238,46 +238,39 @@ describe(
               },
             ],
           },
-          {
-            content: null,
-            toolCalls: [
-              {
-                id: "call-2",
-                name: "write_file",
-                argumentsJson: JSON.stringify({
-                  path: "fixed.md",
-                  content: "Fixed content.",
-                }),
-              },
-            ],
-          },
         ]);
 
-        const strategy = new NativeStrategy(
+        const diagnostics: string[] = [];
+
+        const action = await new NativeStrategy(
           client,
           "system prompt",
-        );
-
-        const action = await strategy.getNextAction(
+        ).getNextAction(
           EMPTY_CONTEXT,
           TOOLS,
           "fake-model",
+          (detail) => diagnostics.push(detail),
         );
 
-        expect(action).toEqual({
-          kind: "tool_call",
+        expect(action).toMatchObject({
+          kind: "rejected_tool_call",
           tool: "write_file",
-          arguments: {
-            path: "fixed.md",
-            content: "Fixed content.",
-          },
-          callId: "call-2",
+          callId: "call-1",
+          arguments: {},
+          errorCode: "TOOL_ARGUMENTS_INVALID_JSON",
         });
+
+        expect(client.requests).toHaveLength(1);
+
+        // The rejected payload is kept for diagnosis.
+        expect(diagnostics[0]).toContain(
+          "Rejected arguments: {not valid json",
+        );
       },
     );
 
     it(
-      "treats schema-invalid arguments (valid JSON, missing a required field) as non-compliant and retries",
+      "returns schema-invalid arguments (valid JSON, missing a required field) as a rejected call with the schema summary and example",
       async () => {
         const client = scriptedNativeClient([
           {
@@ -288,60 +281,44 @@ describe(
                 name: "write_file",
                 // Valid JSON, but write_file also requires "content", which
                 // is missing here: this must be caught by
-                // validateSkyToolRequest, not silently passed through as a
-                // compliant tool call.
+                // validateSkyToolRequest, never executed.
                 argumentsJson: JSON.stringify({
                   path: "notes.md",
-                }),
-              },
-            ],
-          },
-          {
-            content: null,
-            toolCalls: [
-              {
-                id: "call-2",
-                name: "write_file",
-                argumentsJson: JSON.stringify({
-                  path: "notes.md",
-                  content: "Now complete.",
                 }),
               },
             ],
           },
         ]);
 
-        const strategy = new NativeStrategy(
+        const action = await new NativeStrategy(
           client,
           "system prompt",
-        );
-
-        const action = await strategy.getNextAction(
+        ).getNextAction(
           EMPTY_CONTEXT,
           TOOLS,
           "fake-model",
         );
 
-        expect(action).toEqual({
-          kind: "tool_call",
+        expect(action).toMatchObject({
+          kind: "rejected_tool_call",
           tool: "write_file",
+          callId: "call-1",
           arguments: {
             path: "notes.md",
-            content: "Now complete.",
           },
-          callId: "call-2",
+          errorCode: "TOOL_ARGUMENT_VALIDATION_FAILED",
         });
 
-        expect(client.requests).toHaveLength(2);
+        const guidance =
+          (action as { guidance: string }).guidance;
 
-        const correctiveTurn =
-          client.requests[1]!.turns.find(
-            (turn) =>
-              turn.role === "user" &&
-              turn.content.includes("not usable"),
-          );
-
-        expect(correctiveTurn).toBeDefined();
+        expect(guidance).toContain(
+          "Correct the arguments and call write_file again.",
+        );
+        expect(guidance).toContain(
+          "Expected arguments (fields marked ? are optional): { path: string }.",
+        );
+        expect(client.requests).toHaveLength(1);
       },
     );
 
@@ -418,7 +395,7 @@ describe(
     );
 
     it(
-      "throws after exhausting corrective attempts against a persistently non-compliant provider",
+      "answers truthfully from the ledger, instead of throwing, after exhausting corrective attempts against a persistently non-compliant provider",
       async () => {
         const alwaysTwoToolCalls: NativeCompletionResult = {
           content: null,
@@ -442,23 +419,28 @@ describe(
           alwaysTwoToolCalls,
         ]);
 
-        const strategy = new NativeStrategy(
+        const action = await new NativeStrategy(
           client,
           "system prompt",
+        ).getNextAction(
+          EMPTY_CONTEXT,
+          TOOLS,
+          "fake-model",
         );
 
-        await expect(
-          strategy.getNextAction(
-            EMPTY_CONTEXT,
-            TOOLS,
-            "fake-model",
-          ),
-        ).rejects.toThrow(
-          /could not obtain one compliant action/,
+        expect(action).toMatchObject({
+          kind: "final_answer",
+          alreadyDisplayed: false,
+        });
+
+        expect(
+          (action as { text: string }).text,
+        ).toContain(
+          "I stopped because the model's responses could not be used",
         );
 
         // Initial attempt plus MAX_CORRECTIVE_ATTEMPTS (2) corrective
-        // follow-ups.
+        // follow-ups: exactly the configured limit.
         expect(client.requests).toHaveLength(3);
       },
     );
@@ -528,7 +510,7 @@ describe(
     );
 
     it(
-      "reports final exhaustion to onDiagnostic once, right before throwing",
+      "numbers corrective retries exactly within the limit (never 3 of 2) and reports final exhaustion once",
       async () => {
         const alwaysTwoToolCalls: NativeCompletionResult = {
           content: null,
@@ -552,29 +534,33 @@ describe(
           alwaysTwoToolCalls,
         ]);
 
-        const strategy = new NativeStrategy(
-          client,
-          "system prompt",
-        );
-
         const diagnostics: string[] = [];
 
-        await expect(
-          strategy.getNextAction(
-            EMPTY_CONTEXT,
-            TOOLS,
-            "fake-model",
-            (detail) => diagnostics.push(detail),
-          ),
-        ).rejects.toThrow(
-          /could not obtain one compliant action/,
+        await new NativeStrategy(
+          client,
+          "system prompt",
+        ).getNextAction(
+          EMPTY_CONTEXT,
+          TOOLS,
+          "fake-model",
+          (detail) => diagnostics.push(detail),
         );
 
-        // One report per loop iteration that saw a non-compliant response
-        // (MAX_CORRECTIVE_ATTEMPTS + 1 = 3) plus one final report right
-        // before throwing.
         expect(diagnostics).toHaveLength(4);
-
+        expect(diagnostics[0]).toContain(
+          "corrective retry (attempt 1 of 2)",
+        );
+        expect(diagnostics[1]).toContain(
+          "corrective retry (attempt 2 of 2)",
+        );
+        expect(diagnostics[2]).toContain(
+          "after its last corrective retry (2 of 2)",
+        );
+        expect(
+          diagnostics.join("\n"),
+        ).not.toContain(
+          "3 of 2",
+        );
         expect(diagnostics[3]).toContain(
           "could not obtain one compliant action",
         );

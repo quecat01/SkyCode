@@ -98,6 +98,9 @@ export interface ToolDefinition {
  *   action (same tool, same normalized arguments) had already failed
  *   repeatedly this turn with the same result (see repeat-guard.ts). The
  *   tool never ran, so this is neither a success nor a real failure.
+ * - rejected: the call's arguments were not valid JSON or failed the tool's
+ *   schema, so it was refused before running (see argument-guidance.ts).
+ *   Like skipped, the tool never ran; unlike failed, nothing was attempted.
  */
 export type CallState =
   | "pending"
@@ -106,7 +109,8 @@ export type CallState =
   | "verified"
   | "failed"
   | "interrupted"
-  | "skipped";
+  | "skipped"
+  | "rejected";
 
 /**
  * The next action a tool-calling strategy proposes to the agent loop.
@@ -152,6 +156,26 @@ export type AgentAction =
     }
   | {
       kind: "done";
+    }
+  | {
+      /**
+       * A native tool call whose arguments were not valid JSON or failed the
+       * tool's schema. Nothing is executed. runAgentLoop() records it under
+       * the model's own call ID with `guidance` as its not-executed tool
+       * result, so the model sees exactly what to fix on its next step.
+       */
+      kind: "rejected_tool_call";
+      tool: string;
+      callId: string;
+      /** The parsed arguments when they were JSON, otherwise {}. */
+      arguments: unknown;
+      errorCode:
+        | "TOOL_ARGUMENTS_INVALID_JSON"
+        | "TOOL_ARGUMENT_VALIDATION_FAILED";
+      /** The JSON parse error or the validation error, verbatim. */
+      validationError: string;
+      /** The full not-executed result text shown to the model. */
+      guidance: string;
     };
 
 /**
@@ -186,6 +210,18 @@ export type AgentEvent =
        * not count such a result as a real tool failure.
        */
       notExecuted?: true;
+      /**
+       * Why a not-executed call never ran: the repeated-action breaker
+       * ("repeat_blocked"), or arguments rejected before running
+       * ("invalid_arguments"). Lets the execution ledger keep validation
+       * failures (the tool never ran) separate from execution failures (it
+       * ran and failed).
+       */
+      notExecutedReason?:
+        | "repeat_blocked"
+        | "invalid_arguments";
+      /** For invalid_arguments: the JSON parse or validation error. */
+      validationError?: string;
       /**
        * Recovery metadata, passed through unchanged from the tool's own
        * failure result (see ToolExecutionResult in tools.ts). Present only on

@@ -63,6 +63,7 @@ import {
 import {
   buildExecutionLedger,
   buildLedgerFallbackAnswer,
+  buildLedgerStopAnswer,
   checkAnswerAgainstLedger,
   renderExecutionLedger,
 } from "../execution-ledger.js";
@@ -71,6 +72,11 @@ import {
   describeRecovery,
   findUnresolvedSafeRecovery,
 } from "../recovery.js";
+
+import {
+  buildArgumentRejectionText,
+  type ArgumentRejectionCode,
+} from "../argument-guidance.js";
 
 import {
   validateSkyToolRequest,
@@ -127,6 +133,18 @@ type Compliance =
   | {
       kind: "untruthful_final_answer";
       reason: string;
+    }
+  | {
+      /**
+       * Exactly one call to an offered tool whose arguments were not valid
+       * JSON or failed its schema. Not corrected privately: returned as a
+       * rejected_tool_call action so the loop records it (see AgentAction).
+       */
+      kind: "invalid_arguments";
+      call: NativeToolCallRequest;
+      parsedArguments: unknown;
+      code: ArgumentRejectionCode;
+      detail: string;
     };
 
 /**
@@ -260,19 +278,22 @@ function checkCompliance(
       );
   } catch (error) {
     return {
-      kind: "non_compliant",
-      reason: `Its arguments for "${call.name}" were not valid JSON: ${
+      kind: "invalid_arguments",
+      call,
+      parsedArguments: {},
+      code: "TOOL_ARGUMENTS_INVALID_JSON",
+      detail:
         error instanceof Error
           ? error.message
-          : String(error)
-      }`,
+          : String(error),
     };
   }
 
   // Validate against the tool's own argument schema before this candidate
-  // becomes an AgentAction: a schema-invalid call has not executed anything,
-  // so it belongs in the same corrective retry loop as any other
-  // non-compliant response, not silently forwarded to the executor. This
+  // becomes an executable action: a schema-invalid call executes nothing.
+  // It is returned as a rejected call (see AgentAction's rejected_tool_call)
+  // so the loop records it and the model gets concrete guidance under its
+  // own call ID, never silently forwarded to the executor. This
   // unconditional call is correct for every currently offered tool, which
   // are all built-in Sky Code tools; once individually-exposed MCP tools are
   // wired into NativeStrategy (they are currently only reachable via the
@@ -285,12 +306,14 @@ function checkCompliance(
     );
   } catch (error) {
     return {
-      kind: "non_compliant",
-      reason: `Its arguments for "${call.name}" did not pass validation: ${
+      kind: "invalid_arguments",
+      call,
+      parsedArguments,
+      code: "TOOL_ARGUMENT_VALIDATION_FAILED",
+      detail:
         error instanceof Error
           ? error.message
-          : String(error)
-      }`,
+          : String(error),
     };
   }
 
@@ -617,6 +640,49 @@ export class NativeStrategy implements ToolCallStrategy {
         };
       }
 
+      if (compliance.kind === "invalid_arguments") {
+        // The rejected payload itself goes to the session log (diagnostics
+        // only, never model history), so a bad call can be inspected later.
+        onDiagnostic?.(
+          `NativeStrategy rejected arguments for "${compliance.call.name}" (call ${compliance.call.id}, ${compliance.code}): ${compliance.detail}. Rejected arguments: ${
+            compliance.call.argumentsJson.length > 4000
+              ? `${compliance.call.argumentsJson.slice(0, 4000)}...`
+              : compliance.call.argumentsJson
+          }`,
+        );
+
+        const parsed =
+          compliance.parsedArguments;
+
+        return {
+          kind: "rejected_tool_call",
+          tool: compliance.call.name,
+          callId: compliance.call.id,
+          // Recorded and echoed back in native history as the model sent
+          // them when they were a JSON object; otherwise {} (a gateway may
+          // parse echoed arguments, so non-object or unparsable text is
+          // never echoed).
+          arguments:
+            typeof parsed === "object" &&
+            parsed !== null &&
+            !Array.isArray(parsed)
+              ? parsed
+              : {},
+          errorCode: compliance.code,
+          validationError: compliance.detail,
+          guidance:
+            buildArgumentRejectionText(
+              offeredTools.find(
+                (tool) =>
+                  tool.name === compliance.call.name,
+              ),
+              compliance.call.name,
+              compliance.code,
+              compliance.detail,
+            ),
+        };
+      }
+
       if (compliance.kind === "compliant_final_answer") {
         // A tool marked one of this turn's failures as safely recoverable
         // and gave a concrete retry, but the model is about to stop (often by
@@ -672,9 +738,17 @@ export class NativeStrategy implements ToolCallStrategy {
       lastRejection =
         compliance;
 
+      // Numbered by the retries actually made: the response that used the
+      // last retry is reported as such, never as a retry beyond the limit.
       onDiagnostic?.(
-        `NativeStrategy corrective retry (attempt ${attempt + 1} of ${MAX_CORRECTIVE_ATTEMPTS}): ${compliance.reason}`,
+        attempt < MAX_CORRECTIVE_ATTEMPTS
+          ? `NativeStrategy corrective retry (attempt ${attempt + 1} of ${MAX_CORRECTIVE_ATTEMPTS}): ${compliance.reason}`
+          : `NativeStrategy rejected the response after its last corrective retry (${MAX_CORRECTIVE_ATTEMPTS} of ${MAX_CORRECTIVE_ATTEMPTS}): ${compliance.reason}`,
       );
+
+      if (attempt >= MAX_CORRECTIVE_ATTEMPTS) {
+        break;
+      }
 
       correctiveTurns.push(
         ...buildCorrectiveTurns(
@@ -723,16 +797,25 @@ export class NativeStrategy implements ToolCallStrategy {
       };
     }
 
-    const exhaustionMessage =
-      "NativeStrategy could not obtain one compliant action from the model " +
-      `after ${MAX_CORRECTIVE_ATTEMPTS} corrective attempt(s).`;
-
+    // Structural failure (several calls at once, an unknown tool, an empty
+    // or unassemblable response) after every retry. The turn is not failed
+    // with a generic error: work already done this turn stays recorded, so
+    // the answer is a truthful partial result built from the ledger.
     onDiagnostic?.(
-      exhaustionMessage,
+      "NativeStrategy could not obtain one compliant action from the model " +
+        `after ${MAX_CORRECTIVE_ATTEMPTS} corrective attempt(s); answering from the execution ledger instead.`,
     );
 
-    throw new Error(
-      exhaustionMessage,
-    );
+    return {
+      kind: "final_answer",
+      text:
+        buildLedgerStopAnswer(
+          buildExecutionLedger(
+            context.history,
+          ),
+          `the model's responses could not be used (${lastRejection?.reason ?? "no usable response"})`,
+        ),
+      alreadyDisplayed: false,
+    };
   }
 }

@@ -738,7 +738,7 @@ describe(
     );
 
     it(
-      "does not downgrade on malformed native arguments: NativeStrategy corrects them itself",
+      "does not downgrade on malformed native arguments: they become a recorded rejected call, still native",
       async () => {
         const nativeClient =
           scriptedNativeClient([
@@ -752,11 +752,6 @@ describe(
                 },
               ],
             },
-            nativeCall(
-              "good",
-              "create_docx",
-              DOCX_ARGS,
-            ),
           ]);
 
         const textClient =
@@ -778,9 +773,12 @@ describe(
           );
 
         expect(action).toMatchObject({
-          kind: "tool_call",
-          callId: "good",
+          kind: "rejected_tool_call",
+          callId: "bad",
+          errorCode:
+            "TOOL_ARGUMENTS_INVALID_JSON",
         });
+        expect(nativeClient.calls).toBe(1);
         expect(textClient.calls).toHaveLength(0);
         expect(
           cache.get(
@@ -861,7 +859,14 @@ describe(
             {
               id: "a",
               name: "create_docx",
-              argumentsJson: "{",
+              argumentsJson:
+                JSON.stringify(DOCX_ARGS),
+            },
+            {
+              id: "b",
+              name: "create_pdf",
+              argumentsJson:
+                JSON.stringify(PDF_ARGS),
             },
           ],
         };
@@ -884,16 +889,25 @@ describe(
           textClient,
         );
 
-        await expect(
-          strategy.getNextAction(
+        const action =
+          await strategy.getNextAction(
             CONTEXT,
             TOOLS,
             MODEL,
-          ),
-        ).rejects.toThrow(
-          "could not obtain one compliant action",
-        );
+          );
 
+        expect(action).toMatchObject({
+          kind: "final_answer",
+          alreadyDisplayed: false,
+        });
+        expect(
+          action.kind === "final_answer"
+            ? action.text
+            : "",
+        ).toContain(
+          "I stopped because the model's responses could not be used",
+        );
+        expect(nativeClient.calls).toBe(3);
         expect(textClient.calls).toHaveLength(0);
         expect(
           cache.get(
