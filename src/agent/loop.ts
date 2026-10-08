@@ -44,6 +44,19 @@ import {
   isTurnCancellation,
 } from "./cancellation.js";
 
+import {
+  extractSafeRecovery,
+} from "./recovery.js";
+
+import {
+  buildExecutionLedger,
+  buildRepeatStopAnswer,
+} from "./execution-ledger.js";
+
+import {
+  MAX_BLOCKED_REPEATS,
+} from "./repeat-guard.js";
+
 import type {
   PlainConversationTurn,
 } from "./model-client.js";
@@ -322,13 +335,70 @@ export async function runAgentLoop(
             repeat,
           ),
         notExecuted: true,
+        // The original failure's safe recovery, carried forward unchanged
+        // so the model is given the same concrete next step again.
+        ...(repeat.recovery
+          ? {
+              ...(repeat.recovery.errorCode !== undefined
+                ? {
+                    errorCode: repeat.recovery.errorCode,
+                  }
+                : {}),
+              recoverable: true as const,
+              ...(repeat.recovery.recoveryHint !== undefined
+                ? {
+                    recoveryHint: repeat.recovery.recoveryHint,
+                  }
+                : {}),
+              suggestedArguments:
+                repeat.recovery.suggestedArguments,
+            }
+          : {}),
       });
+
+      repeatGuard.recordBlocked(
+        action.tool,
+        action.arguments,
+      );
 
       // Diagnostic only (session log), never added to history: the tool
       // result above already tells the model everything it needs.
       reportDiagnostic(
         `Repeated-action breaker: did not run "${action.tool}" again; the identical call already failed ${repeat.failures} times this turn with the same result.`,
       );
+
+      // The model already received this exact not-executed reply (with any
+      // safe recovery) and asked for the identical call again: answering the
+      // same way would only consume steps, so the turn ends honestly with a
+      // deterministic account of what happened.
+      if (
+        repeat.priorBlocks >=
+        MAX_BLOCKED_REPEATS
+      ) {
+        const text =
+          buildRepeatStopAnswer(
+            buildExecutionLedger(
+              context.history,
+            ),
+            action.tool,
+            repeat.recovery,
+          );
+
+        reportDiagnostic(
+          `Repeated-action breaker: "${action.tool}" was requested again after being blocked; ending the turn with the recorded results.`,
+        );
+
+        record({
+          type: "final_answer",
+          text,
+        });
+
+        return {
+          kind: "final_answer",
+          text,
+          alreadyDisplayed: false,
+        };
+      }
 
       continue;
     }
@@ -398,6 +468,11 @@ export async function runAgentLoop(
       state,
     });
 
+    const recovery =
+      extractSafeRecovery(
+        result,
+      );
+
     record({
       type: "tool_result",
       callId,
@@ -405,6 +480,25 @@ export async function runAgentLoop(
       verified:
         result.verified === true,
       output: result.output,
+      // Failure metadata, recorded only when the tool reported it.
+      ...(!result.success &&
+      result.errorCode !== undefined
+        ? {
+            errorCode: result.errorCode,
+          }
+        : {}),
+      ...(recovery
+        ? {
+            recoverable: true as const,
+            ...(recovery.recoveryHint !== undefined
+              ? {
+                  recoveryHint: recovery.recoveryHint,
+                }
+              : {}),
+            suggestedArguments:
+              recovery.suggestedArguments,
+          }
+        : {}),
     });
 
     repeatGuard.recordResult(
@@ -412,6 +506,7 @@ export async function runAgentLoop(
       action.arguments,
       result.success,
       result.output,
+      recovery,
     );
 
     // Ctrl+C while the tool was running: it was allowed to finish and its

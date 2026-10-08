@@ -33,16 +33,24 @@ import type {
   PlainConversationTurn,
 } from "./model-client.js";
 
+import {
+  describeRecovery,
+  extractSafeRecovery,
+} from "./recovery.js";
+
 /**
  * Describes one recorded tool result in a single readable block, shared by
  * both renderers below.
  *
  * @param {Extract<AgentEvent, {type: "tool_result"}>} event - A recorded
  * tool_result event.
+ * @param {string} [tool] - The tool that was called, used to name the exact
+ * retry when the failure carries a safe recovery.
  * @returns {string} Human/model-readable description of the real outcome.
  */
 function describeToolResult(
   event: Extract<AgentEvent, { type: "tool_result" }>,
+  tool = "the same tool",
 ): string {
   const outcome =
     event.notExecuted
@@ -53,7 +61,19 @@ function describeToolResult(
           ? "succeeded (independently verified)"
           : "succeeded";
 
-  return `Result: ${outcome}\n${event.output}`;
+  // A real failure the tool marked safely recoverable gets its concrete
+  // retry appended. A blocked repeat's output already states it (see
+  // describeBlockedRepeat(), repeat-guard.ts), so it is not repeated twice.
+  const recovery =
+    event.notExecuted
+      ? undefined
+      : extractSafeRecovery(
+          event,
+        );
+
+  return recovery
+    ? `Result: ${outcome}\n${event.output}\n${describeRecovery(tool, recovery)}`
+    : `Result: ${outcome}\n${event.output}`;
 }
 
 /**
@@ -72,33 +92,71 @@ function describeToolResult(
  * narrow meaning on purpose, so a model is never told a tool "verified"
  * anything broader, such as the user's whole goal.
  *
+ * A failure may also carry recovery metadata (see ToolExecutionResult,
+ * tools.ts). It is included as structured fields (`error_code`,
+ * `recoverable`, `suggested_arguments`) plus, for a real failure, a
+ * `recovery` sentence naming the exact retry, so a model of any strength is
+ * given a concrete next action. Nothing here claims the retry happened.
+ *
  * @param {Extract<AgentEvent, {type: "tool_result"}>} event - A recorded
  * tool_result event.
+ * @param {string} [tool] - The tool that was called, used to name the exact
+ * retry in the `recovery` sentence.
  * @returns {string} JSON text for the tool message's content.
  */
 export function describeToolResultForNative(
   event: Extract<AgentEvent, { type: "tool_result" }>,
+  tool = "the same tool",
 ): string {
+  if (
+    event.success &&
+    !event.notExecuted
+  ) {
+    return JSON.stringify({
+      status: "succeeded",
+      postcondition_verified:
+        event.verified,
+      output: event.output,
+    });
+  }
+
+  const recovery =
+    extractSafeRecovery(
+      event,
+    );
+
   // "not_executed" (the repeated-action breaker; see repeat-guard.ts) is
-  // kept distinct from "failed": the tool never ran this time.
-  return JSON.stringify(
-    event.notExecuted
+  // kept distinct from "failed": the tool never ran this time. Its output
+  // already states any recovery in words, so only the structured fields are
+  // added for it.
+  return JSON.stringify({
+    status:
+      event.notExecuted
+        ? "not_executed"
+        : "failed",
+    output: event.output,
+    ...(event.errorCode !== undefined
       ? {
-          status: "not_executed",
-          output: event.output,
+          error_code: event.errorCode,
         }
-      : event.success
-        ? {
-            status: "succeeded",
-            postcondition_verified:
-              event.verified,
-            output: event.output,
-          }
-        : {
-            status: "failed",
-            output: event.output,
-          },
-  );
+      : {}),
+    ...(recovery
+      ? {
+          recoverable: true,
+          ...(event.notExecuted
+            ? {}
+            : {
+                recovery:
+                  describeRecovery(
+                    tool,
+                    recovery,
+                  ),
+              }),
+          suggested_arguments:
+            recovery.suggestedArguments,
+        }
+      : {}),
+  });
 }
 
 /**
@@ -164,7 +222,10 @@ export function renderHistoryAsPlainTurns(
 
       turns.push({
         role: "user",
-        content: describeToolResult(event),
+        content: describeToolResult(
+          event,
+          request?.tool,
+        ),
       });
       continue;
     }
@@ -266,6 +327,7 @@ export function renderHistoryAsNativeTurns(
         content:
           describeToolResultForNative(
             event,
+            request?.tool,
           ),
       });
       continue;

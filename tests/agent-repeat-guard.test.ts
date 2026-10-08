@@ -162,6 +162,7 @@ describe(
           blocked: true,
           failures: 2,
           lastOutput: DOCX_EXISTS,
+          priorBlocks: 0,
         });
       },
     );

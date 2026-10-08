@@ -60,6 +60,109 @@ export class DestinationExistsError extends Error {
 }
 
 /**
+ * Largest numeric suffix suggestAlternativeOutputPath() will try before
+ * giving up on suggesting a name.
+ */
+const MAX_ALTERNATIVE_SUFFIX = 9999;
+
+/**
+ * Finds the next unused sibling filename for a requested output path, for a
+ * recoverable "output path already exists" failure.
+ *
+ * Deterministic: `foo.docx` -> `foo_2.docx`, then `foo_3.docx`, and so on,
+ * in the same directory and with the same extension. A requested name that
+ * already ends in `_N` continues from N + 1 (`foo_2.docx` -> `foo_3.docx`)
+ * rather than growing `foo_2_2.docx`. The result keeps the caller's own
+ * form of the path (relative stays relative), so it can be passed back as
+ * the same tool argument unchanged.
+ *
+ * Only ever suggests: it never creates, moves, or deletes anything, and the
+ * existing file is never touched.
+ *
+ * @param {string} inputPath - Path exactly as the model requested it.
+ * @param {string} workingDirectory - Base directory for relative paths.
+ * @returns {string | undefined} The first candidate with nothing at its
+ * resolved location, or undefined if none was free within
+ * MAX_ALTERNATIVE_SUFFIX or a candidate could not be resolved.
+ *
+ * Side effects: reads the filesystem (existence checks only).
+ */
+export function suggestAlternativeOutputPath(
+  inputPath: string,
+  workingDirectory: string,
+): string | undefined {
+  const lastSeparator =
+    Math.max(
+      inputPath.lastIndexOf("/"),
+      inputPath.lastIndexOf("\\"),
+    );
+
+  const directoryPart =
+    inputPath.slice(
+      0,
+      lastSeparator + 1,
+    );
+
+  const fileName =
+    inputPath.slice(
+      lastSeparator + 1,
+    );
+
+  const dot =
+    fileName.lastIndexOf(".");
+
+  const stem =
+    dot > 0
+      ? fileName.slice(0, dot)
+      : fileName;
+
+  const extension =
+    dot > 0
+      ? fileName.slice(dot)
+      : "";
+
+  const numbered =
+    /^(.*)_(\d+)$/.exec(stem);
+
+  const base =
+    numbered
+      ? numbered[1]!
+      : stem;
+
+  const start =
+    numbered
+      ? Number(numbered[2]) + 1
+      : 2;
+
+  for (
+    let suffix = start;
+    suffix <= MAX_ALTERNATIVE_SUFFIX;
+    suffix += 1
+  ) {
+    const candidate =
+      `${directoryPart}${base}_${suffix}${extension}`;
+
+    let resolved: string;
+
+    try {
+      resolved =
+        resolveFilePath(
+          candidate,
+          workingDirectory,
+        );
+    } catch {
+      return undefined;
+    }
+
+    if (!existsSync(resolved)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Resolves a document tool's requested output path and confirms nothing is
  * already there.
  *

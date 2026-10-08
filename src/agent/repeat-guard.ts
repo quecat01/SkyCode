@@ -26,6 +26,19 @@
  * nothing here affects strategy selection or the Native -> Prompted fallback.
  */
 
+import {
+  canonicalizeArguments,
+} from "./canonical-json.js";
+
+import {
+  describeRecovery,
+  type SafeRecovery,
+} from "./recovery.js";
+
+export {
+  canonicalizeArguments,
+};
+
 /**
  * Real failed executions of one identical action that are allowed before
  * further identical requests are no longer executed: the first attempt plus
@@ -34,51 +47,13 @@
 export const MAX_IDENTICAL_FAILURES = 2;
 
 /**
- * Serializes a value deterministically, with object keys sorted at every
- * level, so two argument objects that differ only in key order compare
- * equal.
- *
- * @param {unknown} value - Arguments (or any JSON-compatible value).
- * @returns {string} Canonical JSON text.
- *
- * Side effects: none.
+ * How many times one identical, already-blocked call is answered with a
+ * not-executed result before the turn ends instead. The first block
+ * delivers the explanation (and any safe recovery); if the model requests
+ * the same call again after seeing it, repeating the same reply would only
+ * consume steps, so the turn ends honestly (see runAgentLoop in loop.ts).
  */
-export function canonicalizeArguments(
-  value: unknown,
-): string {
-  const normalize = (
-    item: unknown,
-  ): unknown => {
-    if (Array.isArray(item)) {
-      return item.map(normalize);
-    }
-
-    if (
-      typeof item === "object" &&
-      item !== null
-    ) {
-      const record =
-        item as Record<string, unknown>;
-
-      return Object.fromEntries(
-        Object.keys(record)
-          .sort()
-          .map(
-            (key) => [
-              key,
-              normalize(record[key]),
-            ],
-          ),
-      );
-    }
-
-    return item;
-  };
-
-  return JSON.stringify(
-    normalize(value) ?? null,
-  );
-}
+export const MAX_BLOCKED_REPEATS = 1;
 
 /**
  * Outcome of checking one requested action.
@@ -93,6 +68,10 @@ export type RepeatCheck =
       failures: number;
       /** The output those failures returned. */
       lastOutput: string;
+      /** The safe recovery the tool attached to that failure, if any. */
+      recovery?: SafeRecovery;
+      /** Times this identical call has already been blocked this turn. */
+      priorBlocks: number;
     };
 
 /**
@@ -105,8 +84,12 @@ export class RepeatGuard {
       {
         count: number;
         lastOutput: string;
+        recovery?: SafeRecovery;
       }
     >();
+
+  private blocks =
+    new Map<string, number>();
 
   /**
    * Builds the identity key for one action.
@@ -158,7 +141,44 @@ export class RepeatGuard {
       blocked: true,
       failures: entry.count,
       lastOutput: entry.lastOutput,
+      ...(entry.recovery
+        ? {
+            recovery: entry.recovery,
+          }
+        : {}),
+      priorBlocks:
+        this.blocks.get(
+          RepeatGuard.key(
+            tool,
+            args,
+          ),
+        ) ?? 0,
     };
+  }
+
+  /**
+   * Records that one identical call was just blocked.
+   *
+   * @param {string} tool - Tool name.
+   * @param {unknown} args - Tool arguments as requested.
+   * @returns {void} Nothing.
+   *
+   * Side effects: mutates this guard.
+   */
+  recordBlocked(
+    tool: string,
+    args: unknown,
+  ): void {
+    const key =
+      RepeatGuard.key(
+        tool,
+        args,
+      );
+
+    this.blocks.set(
+      key,
+      (this.blocks.get(key) ?? 0) + 1,
+    );
   }
 
   /**
@@ -172,6 +192,8 @@ export class RepeatGuard {
    * @param {unknown} args - Tool arguments as requested.
    * @param {boolean} success - Whether the execution succeeded.
    * @param {string} output - The execution's real output.
+   * @param {SafeRecovery} [recovery] - The safe recovery the tool attached
+   * to this failure, if any; repeated when the call is later blocked.
    * @returns {void} Nothing.
    *
    * Side effects: mutates this guard.
@@ -181,6 +203,7 @@ export class RepeatGuard {
     args: unknown,
     success: boolean,
     output: string,
+    recovery?: SafeRecovery,
   ): void {
     const key =
       RepeatGuard.key(
@@ -206,6 +229,11 @@ export class RepeatGuard {
             ? previous.count + 1
             : 1,
         lastOutput: output,
+        ...(recovery
+          ? {
+              recovery,
+            }
+          : {}),
       },
     );
   }
@@ -213,6 +241,10 @@ export class RepeatGuard {
 
 /**
  * Builds the tool result text returned to the model for a blocked repeat.
+ *
+ * When the original failure carried a safe recovery, it is repeated here as
+ * a concrete instruction, so a model that missed it the first time is told
+ * exactly what to do instead of only "choose something else".
  *
  * @param {string} tool - Tool name.
  * @param {Extract<RepeatCheck, {blocked: true}>} check - The blocking check.
@@ -225,9 +257,18 @@ export function describeBlockedRepeat(
     { blocked: true }
   >,
 ): string {
+  const notRun =
+    `Not executed: this exact ${tool} call, with these same arguments, already failed ${check.failures} times in this turn with the same result, so it was not run again. ` +
+    `The failure was: ${check.lastOutput}`;
+
+  if (check.recovery) {
+    return (
+      `${notRun} The previous failure is recoverable. ${describeRecovery(tool, check.recovery)} ` +
+      "Do not repeat the same call."
+    );
+  }
+
   return (
-    `Not executed: this exact ${tool} call, with these same arguments, already failed ${check.failures} times in this turn with the same result, so running it again would fail the same way. ` +
-    `Choose different arguments or a different action, or finish and report the failure. ` +
-    `The failure was: ${check.lastOutput}`
+    `${notRun} Choose different arguments or a different action, or finish and report the failure.`
   );
 }

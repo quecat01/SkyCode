@@ -34,6 +34,12 @@ import type {
   AgentEvent,
 } from "./types.js";
 
+import {
+  describeSuggestedChanges,
+  extractSafeRecovery,
+  type SafeRecovery,
+} from "./recovery.js";
+
 /**
  * The real outcome of one tool call this turn.
  */
@@ -50,6 +56,8 @@ export interface LedgerEntry {
   /** The tool's own post-condition check passed (never "goal met"). */
   verified: boolean;
   output: string;
+  /** A safe recovery the tool attached to this failure, if any. */
+  recovery?: SafeRecovery;
 }
 
 /**
@@ -127,6 +135,17 @@ export function buildExecutionLedger(
         event.verified;
       entry.output =
         event.output;
+
+      const recovery =
+        event.notExecuted
+          ? undefined
+          : extractSafeRecovery(
+              event,
+            );
+
+      if (recovery) {
+        entry.recovery = recovery;
+      }
     }
   }
 
@@ -173,7 +192,12 @@ export function renderExecutionLedger(
             .split("\n")[0]
             ?.trim() ?? "";
 
-        return `${index + 1}. ${subject}: ${outcome}${
+        const recoveryNote =
+          entry.recovery
+            ? ` (recoverable: retry with the same arguments, changing ${describeSuggestedChanges(entry.recovery.suggestedArguments)})`
+            : "";
+
+        return `${index + 1}. ${subject}: ${outcome}${recoveryNote}${
           firstLine !== ""
             ? `. Output: ${firstLine}`
             : ""
@@ -537,4 +561,41 @@ export function buildLedgerFallbackAnswer(
       entries,
     ),
   ].join("\n");
+}
+
+/**
+ * Builds the deterministic final answer used when the model keeps
+ * requesting a call that was already blocked as a failing repeat (see
+ * MAX_BLOCKED_REPEATS, repeat-guard.ts).
+ *
+ * @param {readonly LedgerEntry[]} entries - This turn's ledger.
+ * @param {string} tool - The repeatedly requested tool.
+ * @param {SafeRecovery} [recovery] - The safe retry that was available, if
+ * any; named explicitly so the user knows it was never used.
+ * @returns {string} A plain account of what was recorded and why the turn
+ * stopped.
+ *
+ * Side effects: none.
+ */
+export function buildRepeatStopAnswer(
+  entries: readonly LedgerEntry[],
+  tool: string,
+  recovery?: SafeRecovery,
+): string {
+  const lines = [
+    `I stopped because the same ${tool} call kept being requested after it had already failed with the same result. Here is the recorded result of each step this turn:`,
+    "",
+    renderExecutionLedger(
+      entries,
+    ),
+  ];
+
+  if (recovery) {
+    lines.push(
+      "",
+      `A safe retry was available but was not used: ${tool} with the same arguments, changing ${describeSuggestedChanges(recovery.suggestedArguments)}.`,
+    );
+  }
+
+  return lines.join("\n");
 }

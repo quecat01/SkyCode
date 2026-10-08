@@ -51,7 +51,9 @@ import {
 } from "./docgen/pptx.js";
 
 import {
+  DestinationExistsError,
   formatFileSize,
+  suggestAlternativeOutputPath,
 } from "./docgen/shared.js";
 
 import type {
@@ -147,6 +149,67 @@ function failed(
   return {
     success: false,
     output,
+  };
+}
+
+/**
+ * Builds the failure result for a document tool, adding recovery metadata
+ * when the failure is the one safely recoverable case: the requested output
+ * path already exists.
+ *
+ * That case is recoverable because retrying under an unused name changes
+ * nothing that exists: the existing file is never overwritten, moved, or
+ * deleted. Sky Code only suggests the name (see
+ * suggestAlternativeOutputPath(), docgen/shared.ts); the model still has to
+ * make the next real call itself. Every other failure is returned exactly as
+ * before, with no recovery metadata.
+ *
+ * @param {unknown} error - What the document tool threw.
+ * @param {string} requestedPath - The `path` argument as the model gave it.
+ * @param {string} workingDirectory - Base directory for relative paths.
+ * @returns {ToolExecutionResult} The failure result.
+ *
+ * Side effects: reads the filesystem (existence checks only).
+ */
+function documentToolFailure(
+  error: unknown,
+  requestedPath: string,
+  workingDirectory: string,
+): ToolExecutionResult {
+  if (!(error instanceof DestinationExistsError)) {
+    return failed(
+      formatError(
+        error,
+      ),
+    );
+  }
+
+  const alternative =
+    suggestAlternativeOutputPath(
+      requestedPath,
+      workingDirectory,
+    );
+
+  const result: ToolExecutionResult = {
+    success: false,
+    output:
+      `The requested output path already exists and was not modified: ${error.resolvedPath}. Sky Code's document tools never overwrite an existing file.`,
+    errorCode:
+      "OUTPUT_PATH_EXISTS",
+  };
+
+  if (alternative === undefined) {
+    return result;
+  }
+
+  return {
+    ...result,
+    recoverable: true,
+    recoveryHint:
+      "Retry the same creation tool using the suggested unused path. Do not delete or overwrite the existing file. Continue the remaining requested work without asking the user.",
+    suggestedArguments: {
+      path: alternative,
+    },
   };
 }
 
@@ -465,8 +528,9 @@ export function createPhase1ToolHandlers(
     // execute permission sequence (see getToolPermissionAction in
     // permissions.ts, which maps all of them to the write-file category) but
     // never overwrite an existing destination; a DestinationExistsError from
-    // the docgen layer surfaces through formatError exactly like any other
-    // build failure below.
+    // the docgen layer becomes a recoverable OUTPUT_PATH_EXISTS failure with
+    // a suggested unused filename (see documentToolFailure() above), and
+    // every other build failure surfaces through formatError as before.
     async create_docx(
       args: CreateDocxArgs,
     ): Promise<ToolExecutionResult> {
@@ -530,10 +594,10 @@ export function createPhase1ToolHandlers(
           true,
         );
       } catch (error) {
-        return failed(
-          formatError(
-            error,
-          ),
+        return documentToolFailure(
+          error,
+          args.path,
+          workingDirectory,
         );
       }
     },
@@ -599,10 +663,10 @@ export function createPhase1ToolHandlers(
           true,
         );
       } catch (error) {
-        return failed(
-          formatError(
-            error,
-          ),
+        return documentToolFailure(
+          error,
+          args.path,
+          workingDirectory,
         );
       }
     },
@@ -668,10 +732,10 @@ export function createPhase1ToolHandlers(
           true,
         );
       } catch (error) {
-        return failed(
-          formatError(
-            error,
-          ),
+        return documentToolFailure(
+          error,
+          args.path,
+          workingDirectory,
         );
       }
     },
@@ -737,10 +801,10 @@ export function createPhase1ToolHandlers(
           true,
         );
       } catch (error) {
-        return failed(
-          formatError(
-            error,
-          ),
+        return documentToolFailure(
+          error,
+          args.path,
+          workingDirectory,
         );
       }
     },

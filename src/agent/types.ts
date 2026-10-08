@@ -186,6 +186,17 @@ export type AgentEvent =
        * not count such a result as a real tool failure.
        */
       notExecuted?: true;
+      /**
+       * Recovery metadata, passed through unchanged from the tool's own
+       * failure result (see ToolExecutionResult in tools.ts). Present only on
+       * a failure the tool marked as safely recoverable, or on a blocked
+       * repeat of one (see repeat-guard.ts). Generic: nothing in the agent
+       * interprets errorCode beyond displaying it.
+       */
+      errorCode?: string;
+      recoverable?: true;
+      recoveryHint?: string;
+      suggestedArguments?: Record<string, unknown>;
     }
   | {
       type: "final_answer";
@@ -260,6 +271,14 @@ export interface AgentToolResult {
   output: string;
   verified?: boolean;
   endsTurn?: boolean;
+  /**
+   * Optional failure-recovery metadata, exactly as the tool handler reported
+   * it (see ToolExecutionResult in tools.ts for each field's meaning).
+   */
+  errorCode?: string;
+  recoverable?: boolean;
+  recoveryHint?: string;
+  suggestedArguments?: Record<string, unknown>;
 }
 
 /**

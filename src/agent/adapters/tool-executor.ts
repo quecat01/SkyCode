@@ -192,6 +192,26 @@ export function createLiveToolExecutor(
         toolResult.endsTurn = true;
       }
 
+      // Failure-recovery metadata, passed through exactly as the handler
+      // reported it (see ToolExecutionResult, tools.ts); omitted when absent.
+      if (!result.success) {
+        if (result.errorCode !== undefined) {
+          toolResult.errorCode = result.errorCode;
+        }
+
+        if (result.recoverable === true) {
+          toolResult.recoverable = true;
+        }
+
+        if (result.recoveryHint !== undefined) {
+          toolResult.recoveryHint = result.recoveryHint;
+        }
+
+        if (result.suggestedArguments !== undefined) {
+          toolResult.suggestedArguments = result.suggestedArguments;
+        }
+      }
+
       return toolResult;
     },
   };

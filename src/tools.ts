@@ -2300,6 +2300,27 @@ export interface ToolExecutionResult {
    * it means exactly, and only, "this handler's own check passed."
    */
   verified?: boolean;
+  /**
+   * Machine-readable code for a specific kind of failure (for example
+   * "OUTPUT_PATH_EXISTS"), when the handler has one. Failure results only.
+   */
+  errorCode?: string;
+  /**
+   * True only when the handler itself knows a safe, non-destructive way to
+   * retry (nothing existing is overwritten or deleted, and no new
+   * authorization is implied). Never set for a failure whose recovery would
+   * be destructive, ambiguous, or need the user's decision. Failure results
+   * only.
+   */
+  recoverable?: boolean;
+  /** Plain-language instruction for that safe retry. */
+  recoveryHint?: string;
+  /**
+   * Only the argument fields to change for the safe retry (for example
+   * `{ path: "report_2.docx" }`); every other argument stays as it was. A
+   * suggestion only: Sky Code never executes it on the model's behalf.
+   */
+  suggestedArguments?: Record<string, unknown>;
 }
 
 /**

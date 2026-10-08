@@ -68,6 +68,11 @@ import {
 } from "../execution-ledger.js";
 
 import {
+  describeRecovery,
+  findUnresolvedSafeRecovery,
+} from "../recovery.js";
+
+import {
   validateSkyToolRequest,
 } from "../../tools.js";
 
@@ -469,6 +474,14 @@ export class NativeStrategy implements ToolCallStrategy {
     NativeToolSelector | undefined;
 
   /**
+   * Turns (by their AgentContext, which runAgentLoop() creates once per
+   * turn) in which the model has already been pointed at an unused safe
+   * recovery, so it is reminded at most once per turn, never on every step.
+   */
+  private recoveryReminded =
+    new WeakSet<AgentContext>();
+
+  /**
    * @param {NativeCompletionClient} client - Adapter over the active
    * model/provider's native tool-calling completion endpoint.
    * @param {string} systemPrompt - System prompt to send with every
@@ -605,6 +618,46 @@ export class NativeStrategy implements ToolCallStrategy {
       }
 
       if (compliance.kind === "compliant_final_answer") {
+        // A tool marked one of this turn's failures as safely recoverable
+        // and gave a concrete retry, but the model is about to stop (often by
+        // asking the user what to do). Point it at that retry once per turn.
+        // Only explicitly marked safe recoveries qualify (see recovery.ts);
+        // if the model still answers instead, that answer is accepted.
+        const unused =
+          findUnresolvedSafeRecovery(
+            context.history,
+          );
+
+        if (
+          unused &&
+          !this.recoveryReminded.has(context) &&
+          attempt < MAX_CORRECTIVE_ATTEMPTS
+        ) {
+          this.recoveryReminded.add(
+            context,
+          );
+
+          onDiagnostic?.(
+            `NativeStrategy: a safe recovery for "${unused.tool}" is still unused; asking the model once to continue with it.`,
+          );
+
+          correctiveTurns.push(
+            {
+              role: "assistant",
+              content: compliance.text,
+            },
+            {
+              role: "user",
+              content:
+                "A safe recovery is already available in the recorded tool result. " +
+                `${describeRecovery(unused.tool, unused.recovery)} ` +
+                "Continue the requested task using that recovery instead of asking the user to decide.",
+            },
+          );
+
+          continue;
+        }
+
         // Not yet shown anywhere: this.client never streams to the terminal
         // (see this class's doc comment above). The caller renders it.
         return {
