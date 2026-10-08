@@ -22,25 +22,20 @@ describe(
   "agent/strategy-selection.ts",
   () => {
     it(
-      "MODEL_STRATEGY_CONFIG contains exactly the three models evidence-tested on a native tool-calling path, all mapped to native",
+      "defaults every model to native, with an empty override table",
       () => {
+        expect(DEFAULT_STRATEGY_KIND).toBe(
+          "native",
+        );
+
         expect(
           MODEL_STRATEGY_CONFIG,
-        ).toEqual(
-          {
-            "gemma4-e2b-sky":
-              "native",
-            "gemma4-e4b-sky":
-              "native",
-            "chatgpt-gpt-5.6-sol":
-              "native",
-          },
-        );
+        ).toEqual({});
       },
     );
 
     it(
-      "resolves each configured model to NativeStrategy against the real, non-injected MODEL_STRATEGY_CONFIG",
+      "resolves the current Gemma and GPT models to native with no model entries",
       () => {
         for (
           const model of [
@@ -61,23 +56,23 @@ describe(
     );
 
     it(
-      "resolves any model with no explicit entry to DEFAULT_STRATEGY_KIND against the real MODEL_STRATEGY_CONFIG, even though it now has entries",
+      "resolves a completely unknown model to native, never to legacy",
       () => {
-        expect(
-          resolveStrategyKind(
+        for (
+          const model of [
             "some-unlisted-model",
-          ),
-        ).toBe(
-          DEFAULT_STRATEGY_KIND,
-        );
-
-        expect(
-          resolveStrategyKind(
-            "another-unlisted-model",
-          ),
-        ).toBe(
-          "legacy",
-        );
+            "a-future-model-sky-has-never-seen",
+            "chatgpt-gpt-5.5",
+          ]
+        ) {
+          expect(
+            resolveStrategyKind(
+              model,
+            ),
+          ).toBe(
+            "native",
+          );
+        }
       },
     );
 
@@ -187,31 +182,70 @@ describe(
   "agent/strategy-selection.ts native transport",
   () => {
     it(
-      "streams native requests for exactly the three native models",
+      "defaults every model to streaming, with an empty override table",
       () => {
+        expect(DEFAULT_NATIVE_TRANSPORT).toBe(
+          "streaming",
+        );
+
         expect(
           NATIVE_TRANSPORT_CONFIG,
-        ).toEqual({
-          "gemma4-e2b-sky": "streaming",
-          "gemma4-e4b-sky": "streaming",
-          "chatgpt-gpt-5.6-sol": "streaming",
-        });
+        ).toEqual({});
+
+        for (
+          const model of [
+            "gemma4-e4b-sky",
+            "chatgpt-gpt-5.6-sol",
+            "some-unlisted-model",
+          ]
+        ) {
+          expect(
+            resolveNativeTransport(
+              model,
+            ),
+          ).toBe(
+            "streaming",
+          );
+        }
       },
     );
 
     it(
-      "keeps the non-streaming request as the default for every other model",
+      "still lets an explicit override force a strategy: prompted or legacy",
       () => {
-        expect(DEFAULT_NATIVE_TRANSPORT).toBe(
-          "non_streaming",
+        const overrides: Record<
+          string,
+          StrategyKind
+        > = {
+          "needs-prompted": "prompted",
+          "needs-legacy": "legacy",
+        };
+
+        expect(
+          resolveStrategyKind(
+            "needs-prompted",
+            overrides,
+          ),
+        ).toBe(
+          "prompted",
         );
 
         expect(
-          resolveNativeTransport(
-            "some-unlisted-model",
+          resolveStrategyKind(
+            "needs-legacy",
+            overrides,
           ),
         ).toBe(
-          "non_streaming",
+          "legacy",
+        );
+
+        expect(
+          resolveStrategyKind(
+            "anything-else",
+            overrides,
+          ),
+        ).toBe(
+          "native",
         );
       },
     );

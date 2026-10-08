@@ -228,6 +228,58 @@ describe(
     );
 
     it(
+      "streams by default for a model with no transport entry",
+      async () => {
+        const fetchMock = vi.fn(
+          async () =>
+            sse([
+              {
+                choices: [
+                  {
+                    delta: {
+                      content: "ok",
+                    },
+                    finish_reason: "stop",
+                  },
+                ],
+              },
+            ]),
+        );
+
+        vi.stubGlobal(
+          "fetch",
+          fetchMock,
+        );
+
+        const result =
+          await createLiteLLMNativeCompletionClient(
+            testConfig,
+            resolveNativeTransport,
+          ).complete(
+            requestFor(
+              "a-model-sky-has-never-seen",
+            ),
+          );
+
+        expect(result.content).toBe("ok");
+
+        const body =
+          JSON.parse(
+            String(
+              (
+                fetchMock.mock.calls[0] as unknown as [
+                  string,
+                  RequestInit,
+                ]
+              )[1].body,
+            ),
+          );
+
+        expect(body.stream).toBe(true);
+      },
+    );
+
+    it(
       "passes stream assembly issues through to the strategy",
       async () => {
         vi.stubGlobal(
@@ -269,7 +321,7 @@ describe(
     );
 
     it(
-      "keeps the non-streaming request for any model not configured to stream, and by default",
+      "uses the non-streaming request only through an explicit transport override (or the bare client with no resolver)",
       async () => {
         const fetchMock = vi.fn(
           async () =>
@@ -300,10 +352,16 @@ describe(
 
         await createLiteLLMNativeCompletionClient(
           testConfig,
-          resolveNativeTransport,
+          (model) =>
+            resolveNativeTransport(
+              model,
+              {
+                "endpoint-without-streamed-tools": "non_streaming",
+              },
+            ),
         ).complete(
           requestFor(
-            "some-unlisted-model",
+            "endpoint-without-streamed-tools",
           ),
         );
 

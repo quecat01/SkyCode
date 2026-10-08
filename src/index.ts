@@ -85,6 +85,14 @@ import {
 } from "./agent/tool-relevance.js";
 
 import {
+  NativeSupportCache,
+} from "./agent/native-support.js";
+
+import {
+  NativeFirstStrategy,
+} from "./agent/strategies/native-first.js";
+
+import {
   BUILTIN_TOOL_DEFINITIONS,
 } from "./agent/tool-schema.js";
 
@@ -890,9 +898,24 @@ function createVisibleTextCompletionClient(
 }
 
 /**
+ * Everything the default native strategy needs that outlives one strategy
+ * instance: built once in runCli() and reused across every rebuild, so a
+ * native-tools rejection remembered for one model survives /model switches
+ * for the rest of the process.
+ */
+interface NativeRuntime {
+  client: NativeCompletionClient;
+  supportCache: NativeSupportCache;
+  endpoint: string;
+}
+
+/**
  * Resolves the ToolCallStrategy the currently active model should use
  * (resolveStrategyKind(), agent/strategy-selection.ts), constructed with the
  * matching strategy-aware system prompt (tools.ts) and completion client.
+ * With no explicit override this is always NativeFirstStrategy, for every
+ * model; PromptedStrategy and LegacyStrategy are built directly only when
+ * MODEL_STRATEGY_CONFIG explicitly forces them.
  *
  * Called once at startup and again at every point that already regenerates
  * systemPrompt (a /model switch, or a catalog-skill change), so the strategy
@@ -907,7 +930,10 @@ function createVisibleTextCompletionClient(
  * @param {TextCompletionClient} silentTextClient - Never streams to the
  * terminal; used for PromptedStrategy, whose completions are narrow JSON
  * selections the user should never see.
- * @param {NativeCompletionClient} nativeClient - Used for NativeStrategy.
+ * @param {NativeRuntime} nativeRuntime - The native completion client plus
+ * the session's native-support cache and endpoint, used for the default
+ * NativeFirstStrategy (NativeStrategy with a protocol-level fallback to
+ * PromptedStrategy; see agent/strategies/native-first.ts).
  * @param {readonly McpToolDefinition[]} mcpTools - MCP tools connected for
  * the current session.
  * @param {readonly ActivePluginSkill[]} pluginSkills - Active skills
@@ -925,7 +951,7 @@ function buildToolCallStrategy(
   activeModel: string,
   visibleTextClient: TextCompletionClient,
   silentTextClient: TextCompletionClient,
-  nativeClient: NativeCompletionClient,
+  nativeRuntime: NativeRuntime,
   mcpTools: readonly McpToolDefinition[],
   pluginSkills: readonly ActivePluginSkill[],
   subAgents: readonly ActiveSubAgentDefinition[],
@@ -941,26 +967,40 @@ function buildToolCallStrategy(
     strategyKind ===
     "native"
   ) {
-    return new NativeStrategy(
-      nativeClient,
-      createSkyCodeCapabilitiesPrompt(
-        mcpTools,
-        pluginSkills,
-        subAgents,
-        catalogSkills,
-        skyMdContent,
-        activeModel,
+    const native =
+      new NativeStrategy(
+        nativeRuntime.client,
+        createSkyCodeCapabilitiesPrompt(
+          mcpTools,
+          pluginSkills,
+          subAgents,
+          catalogSkills,
+          skyMdContent,
+          activeModel,
+        ),
+        {
+          // Native models receive only the tools plausibly relevant to the
+          // turn's request (deterministic, with a full-set fallback whenever
+          // relevance is uncertain; see tool-relevance.ts).
+          selectTools:
+            selectRelevantTools,
+        },
+      );
+
+    // The default path for every model: native, falling back to prompted
+    // only if this endpoint + model demonstrably refuses native tools.
+    return new NativeFirstStrategy(
+      native,
+      new PromptedStrategy(
+        silentTextClient,
       ),
-      {
-        // Native models receive only the tools plausibly relevant to the
-        // turn's request (deterministic, with a full-set fallback whenever
-        // relevance is uncertain; see tool-relevance.ts).
-        selectTools:
-          selectRelevantTools,
-      },
+      nativeRuntime.supportCache,
+      nativeRuntime.endpoint,
     );
   }
 
+  // Reached only through an explicit MODEL_STRATEGY_CONFIG override: no
+  // automatic fallback applies to a forced strategy.
   if (
     strategyKind ===
     "prompted"
@@ -2590,12 +2630,22 @@ export async function runCli():
       resolveNativeTransport,
     );
 
+  // One per process: remembers endpoint + model combinations that refused
+  // native tool calling, never persisted (see agent/native-support.ts).
+  const nativeRuntime: NativeRuntime = {
+    client: nativeClient,
+    supportCache:
+      new NativeSupportCache(),
+    endpoint:
+      config.apiUrl,
+  };
+
   let strategy: ToolCallStrategy =
     buildToolCallStrategy(
       activeModel,
       visibleTextClient,
       silentTextClient,
-      nativeClient,
+      nativeRuntime,
       mcpTools,
       pluginSkills,
       subAgents,
@@ -3141,7 +3191,7 @@ export async function runCli():
             activeModel,
             visibleTextClient,
             silentTextClient,
-            nativeClient,
+            nativeRuntime,
             mcpTools,
             pluginSkills,
             subAgents,
@@ -3335,7 +3385,7 @@ export async function runCli():
               activeModel,
               visibleTextClient,
               silentTextClient,
-              nativeClient,
+              nativeRuntime,
               mcpTools,
               pluginSkills,
               subAgents,

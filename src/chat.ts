@@ -824,6 +824,43 @@ function extractNativeCompletionResult(
   };
 }
 
+/**
+ * An unsuccessful HTTP response to a native tool-calling request.
+ *
+ * Carries the real status code and response body as fields, so a caller can
+ * tell a provider that rejects native tool calling apart from every other
+ * failure (authentication, rate limiting, a server error) without parsing
+ * the message (see isNativeToolsUnsupportedError(),
+ * agent/native-support.ts). The message is exactly the one these requests
+ * have always thrown, so anything that displays or matches it is
+ * unchanged.
+ */
+export class NativeRequestHttpError extends Error {
+  /** HTTP status code of the failed response. */
+  readonly status: number;
+
+  /** Response body text (or "status statusText" when the body was empty). */
+  readonly body: string;
+
+  /**
+   * @param {number} status - HTTP status code.
+   * @param {string} body - Response body text, as read by readErrorBody().
+   */
+  constructor(
+    status: number,
+    body: string,
+  ) {
+    super(
+      `LiteLLM native tool-calling request failed: HTTP ${status}: ${body}`,
+    );
+
+    this.name =
+      "NativeRequestHttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 /*
  * Why native requests send neither `tool_choice` nor `parallel_tool_calls`
  * (applies to requestNativeToolCompletion() and streamNativeToolCompletion()
@@ -880,8 +917,9 @@ function extractNativeCompletionResult(
  * @returns {Promise<NativeChatCompletionResult>} The model's response,
  * unvalidated beyond basic structural shape (see NativeStrategy for
  * argument/compliance validation).
- * @throws {Error} If the HTTP response is unsuccessful or does not contain
- * the expected top-level choices/message structure.
+ * @throws {NativeRequestHttpError} If the HTTP response is unsuccessful.
+ * @throws {Error} If the response does not contain the expected top-level
+ * choices/message structure.
  * @throws {TypeError} If the network request itself fails.
  *
  * Side effect: performs an authenticated HTTP request.
@@ -933,8 +971,9 @@ export async function requestNativeToolCompletion(
         response,
       );
 
-    throw new Error(
-      `LiteLLM native tool-calling request failed: HTTP ${response.status}: ${errorBody}`,
+    throw new NativeRequestHttpError(
+      response.status,
+      errorBody,
     );
   }
 
@@ -984,8 +1023,9 @@ export async function requestNativeToolCompletion(
  * generator).
  * @returns {Promise<NativeChatCompletionResult>} The assembled response,
  * including any protocol issues/notes found during assembly.
- * @throws {Error} If the HTTP response is unsuccessful, has no body, or
- * contains an SSE data event that is not valid JSON.
+ * @throws {NativeRequestHttpError} If the HTTP response is unsuccessful.
+ * @throws {Error} If the response has no body or contains an SSE data event
+ * that is not valid JSON.
  * @throws {TypeError} If the network request or stream reading fails.
  *
  * Side effect: performs an authenticated HTTP request.
@@ -1038,8 +1078,9 @@ export async function streamNativeToolCompletion(
         response,
       );
 
-    throw new Error(
-      `LiteLLM native tool-calling request failed: HTTP ${response.status}: ${errorBody}`,
+    throw new NativeRequestHttpError(
+      response.status,
+      errorBody,
     );
   }
 

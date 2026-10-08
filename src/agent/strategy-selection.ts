@@ -1,26 +1,34 @@
 /**
- * Per-model tool-calling strategy selection.
+ * Tool-calling strategy and native transport selection.
  *
  * The agent loop (loop.ts) runs identically regardless of which
- * ToolCallStrategy is active; this module is the one place that decides
- * which strategy a given model actually uses. Selection is explicit and
- * evidence-based, keyed by model name - never guessed from a provider name,
- * a model-name substring ("gpt", "claude", "gemma"), or any other
- * capability heuristic. An entry belongs in MODEL_STRATEGY_CONFIG only once
- * that specific model has actually been tested end to end (real
- * completions, real tool calls) with the strategy it is assigned; until
- * then, every model falls through to DEFAULT_STRATEGY_KIND.
+ * ToolCallStrategy is active; this module decides which one a model starts
+ * with. The rule is the same for every model, whatever its name, size, or
+ * perceived capability:
  *
- * This keeps the promise the wider redesign exists to make: changing
- * /model changes only the reasoning engine, never which tools are
- * available or how reliably they run - a model with no recorded evidence
- * gets the same proven, conservative strategy as every other unproven
- * model, rather than an optimistic guess.
+ * - NativeStrategy is the default for every model, including a model Sky
+ *   Code has never seen. Native tool calling is the provider-standard
+ *   protocol, and how well a model uses it is ordinary agent behavior,
+ *   handled inside NativeStrategy (validation, bounded correction,
+ *   final-answer checks), never by switching strategies.
+ * - PromptedStrategy is reached automatically only when the actual
+ *   endpoint demonstrably rejects native tool calling. That decision is
+ *   made at runtime from the provider's own response, not from any table
+ *   here (see native-support.ts and NativeFirstStrategy,
+ *   strategies/native-first.ts).
+ * - LegacyStrategy is never selected automatically. It is kept for
+ *   backward compatibility and is reachable only through an explicit
+ *   override entry below.
  *
- * Native models also have a transport setting (NATIVE_TRANSPORT_CONFIG):
- * whether their native tool-calling requests are streamed or sent as one
- * non-streaming request. It is separate from strategy selection because it
- * changes only how a response arrives, not how the agent loop behaves.
+ * Model names are never classified here: no table maps a model family or
+ * strength to a strategy. The override tables exist only for genuine
+ * compatibility or debugging needs and are empty by default.
+ *
+ * History: earlier builds defaulted to Legacy and listed models one by one
+ * as each was tested (gemma4-e4b-sky moved Legacy → Prompted → Native that
+ * way). The four-document native acceptance test at commit 264b4b1 passed on
+ * gemma4-e4b-sky with no per-model tuning, and AnythingLLM's native agent
+ * path uses one loop for every model, so the per-model entries were removed.
  */
 
 /**
@@ -34,67 +42,35 @@ export type StrategyKind =
   | "legacy";
 
 /**
- * Strategy used for any model with no explicit entry in
- * MODEL_STRATEGY_CONFIG.
- *
- * Legacy is the only strategy with real production experience against Sky
- * Code's live conversation path (the existing sky-tool fenced-block
- * protocol, unchanged), so it is the safe default until a specific model's
- * Native or Prompted support has actually been verified by testing -
- * never assumed from architectural plausibility alone.
+ * Strategy used for every model without an explicit override.
  */
 export const DEFAULT_STRATEGY_KIND: StrategyKind =
-  "legacy";
+  "native";
 
 /**
- * Explicit, evidence-based strategy assignment per model name.
+ * Explicit per-model strategy overrides, for genuine compatibility or
+ * debugging needs only. Empty by default; Sky Code never adds to it
+ * automatically.
  *
- * Keyed exactly as the model is configured (the LiteLLM model name used
- * throughout Sky Code, e.g. in ~/.sky-code/config.json's `defaultModel` or
- * a session's active model). Deliberately contains no automatic capability
- * guessing: this map is never populated by pattern-matching a model or
- * provider name, only by a real recorded test result for that exact model
- * name.
- *
- * Evidence behind the current entries:
- * - gemma4-e2b-sky, gemma4-e4b-sky, and chatgpt-gpt-5.6-sol were run
- *   through AnythingLLM's native, streamed tool-calling agent path, via the
- *   same LiteLLM gateway Sky Code uses, in a controlled comparison: all
- *   three completed autonomous multi-step tool sequences there
- *   substantially better than through Sky Code's text-protocol strategies.
- *   That establishes that each model and this gateway support native tool
- *   calling; Sky Code's own native path still needs the same acceptance
- *   test (development VM first) before the evidence counts for it.
- * - Earlier evidence for gemma4-e4b-sky, still valid for its fallback:
- *   identical P1-P5 prompts run against LegacyStrategy and PromptedStrategy
- *   on real hardware. Legacy stalled after a single tool call on every
- *   multi-step prompt tried (2 for 2 failures), while Prompted completed
- *   every multi-step prompt tried (3 for 3) and recovered cleanly from
- *   genuine tool-execution failures. If the native path does not hold up for
- *   this model, "prompted" is the evidence-backed fallback entry to restore.
- *
- * Add further entries only after the same kind of real, recorded testing
- * for that exact model name, e.g.:
- *   "some-model-name": "native",
+ * Keyed exactly as the model is configured (the LiteLLM model name, e.g. in
+ * ~/.sky-code/config.json's `defaultModel` or a session's active model). An
+ * entry forces that strategy with no automatic fallback, for example:
+ *   "some-model-name": "prompted",
+ *   "another-model": "legacy",
  */
 export const MODEL_STRATEGY_CONFIG: Readonly<
   Record<string, StrategyKind>
-> = {
-  "gemma4-e2b-sky": "native",
-  "gemma4-e4b-sky": "native",
-  "chatgpt-gpt-5.6-sol": "native",
-};
+> = {};
 
 /**
- * Resolves which tool-calling strategy a given model should use.
+ * Resolves which tool-calling strategy a given model starts with.
  *
  * @param {string} model - Active model identifier, exactly as configured.
- * @param {Readonly<Record<string, StrategyKind>>} [config] - Strategy
- * config to consult. Defaults to MODEL_STRATEGY_CONFIG; overridable so
- * tests can exercise the resolution logic against a fake config without
- * needing real entries in the production map.
- * @returns {StrategyKind} The explicitly configured strategy for this
- * model, or DEFAULT_STRATEGY_KIND when no entry exists.
+ * @param {Readonly<Record<string, StrategyKind>>} [config] - Override table
+ * to consult. Defaults to MODEL_STRATEGY_CONFIG; overridable so tests can
+ * exercise overrides without editing the production table.
+ * @returns {StrategyKind} The explicit override for this model, or
+ * DEFAULT_STRATEGY_KIND when none exists.
  *
  * Side effects: none.
  */
@@ -109,52 +85,43 @@ export function resolveStrategyKind(
 }
 
 /**
- * How a native-strategy model's completions are requested.
+ * How native-strategy completions are requested.
  *
  * - streaming: `stream: true`, with tool-call fragments assembled by index
  *   before anything is acted on (see streamNativeToolCompletion(), chat.ts).
  * - non_streaming: one complete JSON response
- *   (requestNativeToolCompletion(), chat.ts) - the original implementation,
- *   kept as the fallback until streaming is proven for a given model.
+ *   (requestNativeToolCompletion(), chat.ts), kept as a compatibility
+ *   override for an endpoint that cannot stream native tool calls.
  */
 export type NativeTransport =
   | "streaming"
   | "non_streaming";
 
 /**
- * Transport used by any native-strategy model with no explicit entry in
- * NATIVE_TRANSPORT_CONFIG: the original, simpler non-streaming request.
+ * Transport used by every native model without an explicit override.
  */
 export const DEFAULT_NATIVE_TRANSPORT: NativeTransport =
-  "non_streaming";
+  "streaming";
 
 /**
- * Explicit native transport per model name, keyed exactly like
- * MODEL_STRATEGY_CONFIG.
- *
- * The three native models are set to "streaming" because that is the
- * transport AnythingLLM used successfully with them through the same
- * gateway (see MODEL_STRATEGY_CONFIG's evidence notes). Changing an entry
- * to "non_streaming" (or deleting it) falls that model back to the
- * original non-streaming request without touching anything else.
+ * Explicit per-model native transport overrides, keyed exactly like
+ * MODEL_STRATEGY_CONFIG. Empty by default. An entry represents an actual
+ * endpoint/provider compatibility need, never model capability, e.g.:
+ *   "some-model-name": "non_streaming",
  */
 export const NATIVE_TRANSPORT_CONFIG: Readonly<
   Record<string, NativeTransport>
-> = {
-  "gemma4-e2b-sky": "streaming",
-  "gemma4-e4b-sky": "streaming",
-  "chatgpt-gpt-5.6-sol": "streaming",
-};
+> = {};
 
 /**
  * Resolves which transport a native-strategy model's requests use.
  *
  * @param {string} model - Active model identifier, exactly as configured.
- * @param {Readonly<Record<string, NativeTransport>>} [config] - Transport
- * config to consult. Defaults to NATIVE_TRANSPORT_CONFIG; overridable for
+ * @param {Readonly<Record<string, NativeTransport>>} [config] - Override
+ * table to consult. Defaults to NATIVE_TRANSPORT_CONFIG; overridable for
  * tests.
- * @returns {NativeTransport} The configured transport, or
- * DEFAULT_NATIVE_TRANSPORT when no entry exists.
+ * @returns {NativeTransport} The explicit override, or
+ * DEFAULT_NATIVE_TRANSPORT when none exists.
  *
  * Side effects: none.
  */
