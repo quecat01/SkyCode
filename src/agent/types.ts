@@ -94,6 +94,10 @@ export interface ToolDefinition {
  * - interrupted: Sky stopped (crash, restart, session end) while this call
  *   was pending or running, with no result ever recorded. Distinct from
  *   failed: whether the tool actually completed is unknown, not negative.
+ * - skipped: Sky Code deliberately did not run the tool, because this exact
+ *   action (same tool, same normalized arguments) had already failed
+ *   repeatedly this turn with the same result (see repeat-guard.ts). The
+ *   tool never ran, so this is neither a success nor a real failure.
  */
 export type CallState =
   | "pending"
@@ -101,7 +105,8 @@ export type CallState =
   | "succeeded"
   | "verified"
   | "failed"
-  | "interrupted";
+  | "interrupted"
+  | "skipped";
 
 /**
  * The next action a tool-calling strategy proposes to the agent loop.
@@ -173,6 +178,14 @@ export type AgentEvent =
       success: boolean;
       verified: boolean;
       output: string;
+      /**
+       * Present (true) only when Sky Code answered this call without running
+       * the tool at all - today, only the repeated-action breaker (see
+       * repeat-guard.ts). `success` is false and `output` explains why it
+       * was not run. Consumers that summarize what actually happened must
+       * not count such a result as a real tool failure.
+       */
+      notExecuted?: true;
     }
   | {
       type: "final_answer";

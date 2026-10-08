@@ -45,11 +45,13 @@ function describeToolResult(
   event: Extract<AgentEvent, { type: "tool_result" }>,
 ): string {
   const outcome =
-    !event.success
-      ? "failed"
-      : event.verified
-        ? "succeeded (independently verified)"
-        : "succeeded";
+    event.notExecuted
+      ? "not executed"
+      : !event.success
+        ? "failed"
+        : event.verified
+          ? "succeeded (independently verified)"
+          : "succeeded";
 
   return `Result: ${outcome}\n${event.output}`;
 }
@@ -77,18 +79,25 @@ function describeToolResult(
 export function describeToolResultForNative(
   event: Extract<AgentEvent, { type: "tool_result" }>,
 ): string {
+  // "not_executed" (the repeated-action breaker; see repeat-guard.ts) is
+  // kept distinct from "failed": the tool never ran this time.
   return JSON.stringify(
-    event.success
+    event.notExecuted
       ? {
-          status: "succeeded",
-          postcondition_verified:
-            event.verified,
+          status: "not_executed",
           output: event.output,
         }
-      : {
-          status: "failed",
-          output: event.output,
-        },
+      : event.success
+        ? {
+            status: "succeeded",
+            postcondition_verified:
+              event.verified,
+            output: event.output,
+          }
+        : {
+            status: "failed",
+            output: event.output,
+          },
   );
 }
 

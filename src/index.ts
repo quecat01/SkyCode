@@ -1767,6 +1767,17 @@ export async function completeConversationTurn(
               ) ??
               "tool";
 
+            // A result the repeated-action breaker answered without running
+            // the tool (agent/repeat-guard.ts) is shown as skipped, never as
+            // another failure of the tool itself.
+            if (event.notExecuted) {
+              console.log(
+                `Tool skipped: ${toolName} (the identical call already failed repeatedly this turn)`,
+              );
+
+              return;
+            }
+
             console.log(
               event.success
                 ? `Tool completed: ${toolName}`

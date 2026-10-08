@@ -34,6 +34,11 @@ import {
   deriveCallState,
 } from "./types.js";
 
+import {
+  describeBlockedRepeat,
+  RepeatGuard,
+} from "./repeat-guard.js";
+
 import type {
   PlainConversationTurn,
 } from "./model-client.js";
@@ -110,6 +115,11 @@ export async function runAgentLoop(
     goal,
     history: [],
   };
+
+  // One per turn: remembers failed actions so an identical action that keeps
+  // failing the same way is not executed indefinitely (see repeat-guard.ts).
+  const repeatGuard =
+    new RepeatGuard();
 
   // Centralizes every state mutation through one function so "history only
   // grows from recorded events, in order, with the listener kept in sync"
@@ -209,6 +219,45 @@ export async function runAgentLoop(
       arguments: action.arguments,
     });
 
+    const repeat =
+      repeatGuard.check(
+        action.tool,
+        action.arguments,
+      );
+
+    if (repeat.blocked) {
+      // The model's call is still recorded (above) and answered (below), so
+      // native history keeps a matching tool result for every assistant tool
+      // call; the external tool itself is never run again. Then the loop
+      // simply continues: the model sees why and can choose another action.
+      record({
+        type: "tool_state_changed",
+        callId,
+        state: "skipped",
+      });
+
+      record({
+        type: "tool_result",
+        callId,
+        success: false,
+        verified: false,
+        output:
+          describeBlockedRepeat(
+            action.tool,
+            repeat,
+          ),
+        notExecuted: true,
+      });
+
+      // Diagnostic only (session log), never added to history: the tool
+      // result above already tells the model everything it needs.
+      reportDiagnostic(
+        `Repeated-action breaker: did not run "${action.tool}" again; the identical call already failed ${repeat.failures} times this turn with the same result.`,
+      );
+
+      continue;
+    }
+
     record({
       type: "tool_state_changed",
       callId,
@@ -259,6 +308,13 @@ export async function runAgentLoop(
         result.verified === true,
       output: result.output,
     });
+
+    repeatGuard.recordResult(
+      action.tool,
+      action.arguments,
+      result.success,
+      result.output,
+    );
 
     if (result.endsTurn === true) {
       // The real, already-recorded tool result marks this turn as over
