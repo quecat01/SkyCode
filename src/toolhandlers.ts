@@ -43,6 +43,10 @@ import {
 } from "./docgen/xlsx.js";
 
 import {
+  resolveWorksheetNames,
+} from "./docgen/worksheet-names.js";
+
+import {
   createPdfFile,
 } from "./docgen/pdf.js";
 
@@ -658,8 +662,11 @@ export function createPhase1ToolHandlers(
         // validation has already passed (see its validate step in
         // docgen/xlsx.ts), so reaching this line is itself the independent
         // post-condition check verified: true reports.
+        // The final worksheet names are reported, including any default
+        // assigned to a sheet without one, so the model's answer can state
+        // what the workbook actually contains.
         return succeeded(
-          `Created XLSX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}).`,
+          `Created XLSX file at ${result.resolvedPath} (${formatFileSize(result.sizeBytes)}). Worksheets: ${resolveWorksheetNames(args.sheets).join(", ")}.`,
           true,
         );
       } catch (error) {

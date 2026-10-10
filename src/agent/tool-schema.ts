@@ -108,8 +108,9 @@ const xlsxSheetSchema: JsonSchema = {
     name: {
       type: "string",
       minLength: 1,
+      maxLength: 31,
       description:
-        "Worksheet name.",
+        "Optional worksheet name. Omit it to use Sheet1, Sheet2, ... by position. If given: at most 31 characters, none of : \\ / ? * [ ], unique ignoring case.",
     },
     headers: {
       type: "array",
@@ -130,7 +131,6 @@ const xlsxSheetSchema: JsonSchema = {
     },
   },
   required: [
-    "name",
     "rows",
   ],
 };

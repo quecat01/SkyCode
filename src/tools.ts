@@ -34,6 +34,10 @@ import {
   type ActivePluginSkill,
 } from "./plugins.js";
 
+import {
+  findWorksheetNameProblem,
+} from "./docgen/worksheet-names.js";
+
 /**
  * Tool identifiers that may appear in a model-generated `sky-tool` request.
  *
@@ -202,8 +206,13 @@ export type XlsxCellValue =
  * One worksheet definition accepted by create_xlsx.
  */
 export interface XlsxSheetInput {
-  /** Worksheet name, shown on its tab. */
-  name: string;
+  /**
+   * Worksheet name, shown on its tab. Optional: a sheet without one is named
+   * Sheet1, Sheet2, ... by its position (see resolveWorksheetNames(),
+   * docgen/worksheet-names.ts). When present it must follow Excel's naming
+   * rules and be unique ignoring case (checked by validateXlsxSheets()).
+   */
+  name?: string;
   /**
    * Optional header row. When present, it is rendered bold and frozen at
    * the top of the sheet; column widths are auto-sized to content either
@@ -663,7 +672,7 @@ function buildSkyCodeCapabilitiesLines(
     "- web_fetch(url): Fetch and read the readable text content of one specific public https:// URL",
     "- create_docx(path, content): Create a genuine Word document. content is Markdown (headings, paragraphs, bold/italic, inline code, bullet/numbered lists, tables); the first level-1 heading becomes the document title.",
     "- create_pdf(path, content): Create a genuine PDF document. Same Markdown content rules as create_docx.",
-    "- create_xlsx(path, sheets): Create a genuine Excel workbook. sheets is an array of {name, headers?, rows}; rows is an array of arrays of cell values (string, number, boolean, or {date:\"YYYY-MM-DD\"}); a cell value starting with \"=\" is a formula.",
+    "- create_xlsx(path, sheets): Create a genuine Excel workbook. sheets is an array of {name?, headers?, rows} (a sheet without a name is called Sheet1, Sheet2, ... by position); rows is an array of arrays of cell values (string, number, boolean, or {date:\"YYYY-MM-DD\"}); a cell value starting with \"=\" is a formula.",
     "- create_pptx(path, slides): Create a genuine PowerPoint presentation. slides is an array of {type:\"title\", title, subtitle?, bullets?} or {type:\"content\", title?, bullets?, table?, image?} or {type:\"chart\", title?, categories, series} (series is [{name, values}]; use real numeric values so a bar chart's proportions are accurate).",
     "",
     "Use create_docx/create_xlsx/create_pdf/create_pptx instead of write_file whenever the user wants a real Word, Excel, PDF, or PowerPoint file. write_file only produces plain text and cannot create these formats. None of the four document tools will overwrite an existing file; choose a different path if one is already there.",
@@ -1103,6 +1112,9 @@ function isRecord(
  * @param {string} key - Property name whose value should be validated.
  * @param {boolean} allowEmpty - Whether an empty string is acceptable.
  * Defaults to false.
+ * @param {string} label - How the argument is named in an error message.
+ * Defaults to key; a nested field passes its full path (for example
+ * "sheets[0].name") so the model can tell which field to fix.
  * @returns {string} The original string value without trimming or otherwise
  * modifying it.
  * @throws {Error} If the property is not a string or is empty when allowEmpty
@@ -1112,12 +1124,13 @@ function requireString(
   args: Record<string, unknown>,
   key: string,
   allowEmpty: boolean = false,
+  label: string = key,
 ): string {
   const value = args[key];
 
   if (typeof value !== "string") {
     throw new Error(
-      `Tool argument "${key}" must be a string`,
+      `Tool argument "${label}" must be a string`,
     );
   }
 
@@ -1126,7 +1139,7 @@ function requireString(
     value.trim() === ""
   ) {
     throw new Error(
-      `Tool argument "${key}" must not be empty`,
+      `Tool argument "${label}" must not be empty`,
     );
   }
 
@@ -1215,6 +1228,9 @@ function requireStringArrayValue(
  * @param {string} key - Property name whose value should be validated.
  * @param {boolean} allowMissing - Whether an undefined property returns
  * undefined instead of throwing. Defaults to false.
+ * @param {string} label - How the argument is named in an error message.
+ * Defaults to key; a nested field passes its full path (for example
+ * "slides[2].bullets").
  * @returns {string[] | undefined} The validated string array, or undefined
  * when the property is omitted and allowMissing is true.
  * @throws {Error} If the property is present but is not an array of strings,
@@ -1224,6 +1240,7 @@ function requireStringArray(
   args: Record<string, unknown>,
   key: string,
   allowMissing: boolean = false,
+  label: string = key,
 ): string[] | undefined {
   const value = args[key];
 
@@ -1233,7 +1250,7 @@ function requireStringArray(
 
   return requireStringArrayValue(
     value,
-    key,
+    label,
   );
 }
 
@@ -1280,9 +1297,16 @@ function validateXlsxCellValue(
  * Validates the `sheets` argument for create_xlsx.
  *
  * @param {Record<string, unknown>} args - Parsed tool argument object.
+ * A sheet's `name` is optional. When present it must be a non-empty string
+ * that follows Excel's naming rules (findWorksheetNameProblem(),
+ * docgen/worksheet-names.ts) and is unique among the sheets ignoring case,
+ * as Excel requires; it is returned exactly as given. An omitted name stays
+ * omitted here and is assigned when the workbook is built.
+ *
  * @returns {XlsxSheetInput[]} Validated worksheet definitions.
  * @throws {Error} If `sheets` is missing, empty, or any sheet's shape is
- * invalid.
+ * invalid, including an explicit name that breaks Excel's rules or repeats
+ * another sheet's name.
  */
 function validateXlsxSheets(
   args: Record<string, unknown>,
@@ -1298,6 +1322,10 @@ function validateXlsxSheets(
     );
   }
 
+  // Explicit names seen so far, lowercased, mapped to their sheet index.
+  const explicitNames =
+    new Map<string, number>();
+
   return rawSheets.map(
     (rawSheet, sheetIndex) => {
       if (!isRecord(rawSheet)) {
@@ -1306,15 +1334,50 @@ function validateXlsxSheets(
         );
       }
 
-      const name = requireString(
-        rawSheet,
-        "name",
-      );
+      const name =
+        rawSheet.name === undefined
+          ? undefined
+          : requireString(
+              rawSheet,
+              "name",
+              false,
+              `sheets[${sheetIndex}].name`,
+            );
+
+      if (name !== undefined) {
+        const problem =
+          findWorksheetNameProblem(
+            name,
+          );
+
+        if (problem) {
+          throw new Error(
+            `Tool argument "sheets[${sheetIndex}].name" ${problem}. Omit it to use the default name Sheet${sheetIndex + 1}`,
+          );
+        }
+
+        const earlier =
+          explicitNames.get(
+            name.toLowerCase(),
+          );
+
+        if (earlier !== undefined) {
+          throw new Error(
+            `Tool argument "sheets[${sheetIndex}].name" repeats the name of sheets[${earlier}] (worksheet names must be unique, ignoring case)`,
+          );
+        }
+
+        explicitNames.set(
+          name.toLowerCase(),
+          sheetIndex,
+        );
+      }
 
       const headers = requireStringArray(
         rawSheet,
         "headers",
         true,
+        `sheets[${sheetIndex}].headers`,
       );
 
       const rawRows = rawSheet.rows;
@@ -1344,7 +1407,11 @@ function validateXlsxSheets(
       );
 
       return {
-        name,
+        ...(name !== undefined
+          ? {
+              name,
+            }
+          : {}),
         ...(headers
           ? {
               headers,
@@ -1386,6 +1453,7 @@ function validatePptxSlide(
         rawSlide,
         "bullets",
         true,
+        `slides[${index}].bullets`,
       );
 
     return {
@@ -1393,6 +1461,8 @@ function validatePptxSlide(
       title: requireString(
         rawSlide,
         "title",
+        false,
+        `slides[${index}].title`,
       ),
       ...(typeof rawSlide.subtitle ===
       "string"
@@ -1473,6 +1543,8 @@ function validatePptxSlide(
         path: requireString(
           image,
           "path",
+          false,
+          `slides[${index}].image.path`,
         ),
         ...(typeof image.caption ===
         "string"
@@ -1489,6 +1561,7 @@ function validatePptxSlide(
         rawSlide,
         "bullets",
         true,
+        `slides[${index}].bullets`,
       );
 
     return {
@@ -1546,6 +1619,8 @@ function validatePptxSlide(
         const name = requireString(
           rawOneSeries,
           "name",
+          false,
+          `slides[${index}].series[${seriesIndex}].name`,
         );
 
         const rawValues =

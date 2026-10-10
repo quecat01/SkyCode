@@ -218,28 +218,44 @@ describe(
         );
 
         it(
-          "rejects a sheet missing a name",
+          "accepts a sheet without a name, leaving it unnamed until the workbook is built",
           () => {
-            expect(
-              () =>
-                parseSkyToolRequest(
-                  toolBlock(
-                    "create_xlsx",
-                    {
-                      path: "book.xlsx",
-                      sheets: [
-                        {
-                          rows: [
-                            [
-                              "a",
-                            ],
+            const request =
+              parseSkyToolRequest(
+                toolBlock(
+                  "create_xlsx",
+                  {
+                    path: "book.xlsx",
+                    sheets: [
+                      {
+                        rows: [
+                          [
+                            "a",
                           ],
-                        },
-                      ],
-                    },
-                  ),
+                        ],
+                      },
+                    ],
+                  },
                 ),
-            ).toThrow();
+              );
+
+            expect(
+              request,
+            ).toEqual({
+              tool: "create_xlsx",
+              args: {
+                path: "book.xlsx",
+                sheets: [
+                  {
+                    rows: [
+                      [
+                        "a",
+                      ],
+                    ],
+                  },
+                ],
+              },
+            });
           },
         );
 
@@ -435,7 +451,7 @@ describe(
                   ),
                 ),
             ).toThrow(
-              'Tool argument "title" must be a string',
+              'Tool argument "slides[0].title" must be a string',
             );
           },
         );
@@ -586,7 +602,7 @@ describe(
                   ),
                 ),
             ).toThrow(
-              'Tool argument "path" must be a string',
+              'Tool argument "slides[0].image.path" must be a string',
             );
           },
         );

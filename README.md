@@ -1152,7 +1152,7 @@ path
 sheets
 ```
 
-Each entry in `sheets` has a `name`, an optional `headers` row (rendered bold and frozen at the top), and `rows` of cell values. A cell value is a string, number, boolean, or `{"date":"YYYY-MM-DD"}` for a real Excel date; a string starting with `=` is written as a formula. Columns are auto-sized to their content, and data rows use alternating banding with thin borders.
+Each entry in `sheets` has an optional `name` (a sheet without one is named `Sheet1`, `Sheet2`, ... by its position, skipping any name another sheet already uses; a given name must follow Excel's rules: at most 31 characters, none of `: \ / ? * [ ]`, not starting or ending with an apostrophe, not `History`, and unique ignoring case), an optional `headers` row (rendered bold and frozen at the top), and `rows` of cell values. A cell value is a string, number, boolean, or `{"date":"YYYY-MM-DD"}` for a real Excel date; a string starting with `=` is written as a formula. Columns are auto-sized to their content, and data rows use alternating banding with thin borders.
 
 ### `create_pdf`
 

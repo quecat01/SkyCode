@@ -21,6 +21,10 @@ import {
   type CreateDocumentFileResult,
 } from "./shared.js";
 
+import {
+  resolveWorksheetNames,
+} from "./worksheet-names.js";
+
 import type {
   CreateXlsxArgs,
   XlsxCellValue,
@@ -348,6 +352,8 @@ function autoSizeColumns(
  *
  * @param {ExcelJS.Workbook} workbook - Workbook to add the sheet to.
  * @param {XlsxSheetInput} sheet - Validated sheet definition.
+ * @param {string} name - The sheet's final name (see
+ * resolveWorksheetNames(), worksheet-names.ts).
  * @returns {void}
  * @throws {Error} If a date cell's ISO string cannot be parsed.
  *
@@ -356,9 +362,10 @@ function autoSizeColumns(
 function addWorksheetFromInput(
   workbook: ExcelJS.Workbook,
   sheet: XlsxSheetInput,
+  name: string,
 ): void {
   const worksheet = workbook.addWorksheet(
-    sheet.name,
+    name,
   );
 
   if (sheet.headers) {
@@ -393,9 +400,20 @@ async function buildXlsxBuffer(
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
 
-  for (const sheet of sheets) {
-    addWorksheetFromInput(workbook, sheet);
-  }
+  const names =
+    resolveWorksheetNames(
+      sheets,
+    );
+
+  sheets.forEach(
+    (sheet, index) => {
+      addWorksheetFromInput(
+        workbook,
+        sheet,
+        names[index]!,
+      );
+    },
+  );
 
   const arrayBuffer = await workbook.xlsx.writeBuffer();
 
