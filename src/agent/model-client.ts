@@ -135,6 +135,13 @@ export interface NativeCompletionResult {
    * diagnostics only.
    */
   protocolNotes?: string[];
+  /**
+   * Content-free summaries of the request sent and the response received
+   * (in production, built by native-diagnostics.ts), reported by
+   * NativeStrategy as diagnostics only, so an unusable response can be
+   * traced to the provider or to Sky Code. Never affects compliance.
+   */
+  exchangeDiagnostics?: string[];
 }
 
 /**

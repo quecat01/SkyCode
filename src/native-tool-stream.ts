@@ -32,7 +32,20 @@
  * - A call with no function name, or a stream cut off by the token limit
  *   (`finish_reason: "length"`) while a call was open, is incomplete and
  *   reported as a fatal protocol issue: the caller must not execute it.
+ *
+ * It also records content-free facts about the stream (see
+ * NativeResponseStats, native-diagnostics.ts): chunk counts, how much text,
+ * reasoning text, and tool-call data arrived, any error a gateway sent
+ * inside the stream, and token usage when reported. They are for the
+ * session log only and never change what is assembled.
  */
+
+import {
+  countReasoningChars,
+  extractGatewayError,
+  readUsage,
+  type NativeResponseStats,
+} from "./native-diagnostics.js";
 
 /**
  * One fully assembled native tool call, in the same shape chat.ts's
@@ -62,6 +75,11 @@ export interface NativeStreamAssembly {
   finishReason: string | null;
   protocolIssues: string[];
   protocolNotes: string[];
+  /** Content-free facts about the stream, for diagnostics only. */
+  stats: Omit<
+    NativeResponseStats,
+    "transport" | "doneMarker"
+  >;
 }
 
 /**
@@ -157,6 +175,22 @@ export class NativeToolCallStreamAssembler {
   private finishReason: string | null = null;
 
   private createId: () => string;
+
+  // Diagnostics only (see NativeStreamAssembly.stats).
+  private chunks = 0;
+
+  private choicelessChunks = 0;
+
+  private reasoningChars = 0;
+
+  private toolCallParts = 0;
+
+  private errors: string[] = [];
+
+  private usage: {
+    promptTokens?: number;
+    completionTokens?: number;
+  } = {};
 
   /**
    * @param {NativeToolCallStreamAssemblerOptions} [options] - Optional
@@ -283,6 +317,29 @@ export class NativeToolCallStreamAssembler {
       return;
     }
 
+    this.chunks += 1;
+
+    // A gateway can report a failure inside an otherwise successful stream,
+    // as a chunk with an error and no choices; it is recorded so it is not
+    // indistinguishable from an empty reply.
+    const error =
+      extractGatewayError(
+        chunk,
+      );
+
+    if (error !== undefined) {
+      this.errors.push(
+        error,
+      );
+    }
+
+    this.usage = {
+      ...this.usage,
+      ...readUsage(
+        chunk,
+      ),
+    };
+
     const choices =
       chunk.choices;
 
@@ -290,6 +347,7 @@ export class NativeToolCallStreamAssembler {
       !Array.isArray(choices) ||
       choices.length === 0
     ) {
+      this.choicelessChunks += 1;
       return;
     }
 
@@ -323,12 +381,21 @@ export class NativeToolCallStreamAssembler {
         delta.content;
     }
 
+    // Counted only: reasoning text is never used or kept.
+    this.reasoningChars +=
+      countReasoningChars(
+        delta,
+      );
+
     const toolCalls =
       delta.tool_calls;
 
     if (!Array.isArray(toolCalls)) {
       return;
     }
+
+    this.toolCallParts +=
+      toolCalls.length;
 
     for (
       const rawFragment of toolCalls
@@ -468,6 +535,24 @@ export class NativeToolCallStreamAssembler {
         this.finishReason,
       protocolIssues,
       protocolNotes,
+      stats: {
+        finishReason:
+          this.finishReason,
+        chunks:
+          this.chunks,
+        choicelessChunks:
+          this.choicelessChunks,
+        contentChars:
+          this.content.length,
+        reasoningChars:
+          this.reasoningChars,
+        toolCallParts:
+          this.toolCallParts,
+        errors: [
+          ...this.errors,
+        ],
+        ...this.usage,
+      },
     };
   }
 }

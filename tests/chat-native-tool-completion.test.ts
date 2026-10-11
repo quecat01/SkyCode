@@ -217,6 +217,12 @@ describe(
               },
             },
           ],
+          diagnostics: {
+            request:
+              "request: 1 messages [system]; pairing ok; 1 tools; body 279 chars",
+            response:
+              "response (non_streaming): finish_reason=none; content_chars=0; reasoning_chars=0; tool_call_parts=1; errors=0",
+          },
         });
       },
     );
@@ -253,6 +259,12 @@ describe(
         expect(result).toEqual({
           content: "Nothing to do here.",
           toolCalls: [],
+          diagnostics: {
+            request:
+              "request: 1 messages [system]; pairing ok; 1 tools; body 279 chars",
+            response:
+              "response (non_streaming): finish_reason=none; content_chars=19; reasoning_chars=0; tool_call_parts=0; errors=0",
+          },
         });
       },
     );

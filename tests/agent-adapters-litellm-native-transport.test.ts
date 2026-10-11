@@ -179,6 +179,12 @@ describe(
               argumentsJson: '{"path":"b.txt"}',
             },
           ],
+          // Shows the canonical history actually sent: the earlier call and
+          // its role:"tool" result, paired by call ID.
+          exchangeDiagnostics: [
+            "gemma4-e4b-sky request: 4 messages [system, user, assistant(call_1 read_file), tool(call_1 succeeded 70 chars)]; pairing ok; 0 tools; body 424 chars",
+            "gemma4-e4b-sky response (streaming): finish_reason=tool_calls; chunks=2; choiceless_chunks=0; content_chars=0; reasoning_chars=0; tool_call_parts=2; errors=0; done=true",
+          ],
         });
 
         const body =

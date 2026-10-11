@@ -615,6 +615,17 @@ export class NativeStrategy implements ToolCallStrategy {
           request,
         );
 
+      // Content-free summaries of this exchange (session log only): what
+      // was sent, and what actually arrived, so an unusable response can be
+      // traced to the provider or to Sky Code.
+      for (
+        const line of result.exchangeDiagnostics ?? []
+      ) {
+        onDiagnostic?.(
+          `NativeStrategy exchange: ${line}`,
+        );
+      }
+
       for (
         const note of result.protocolNotes ?? []
       ) {

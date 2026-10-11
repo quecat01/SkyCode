@@ -441,6 +441,10 @@ describe(
               argumentsJson: '{"path":"z.txt"}',
             },
           ],
+          exchangeDiagnostics: [
+            "test-model request: 1 messages [system]; pairing ok; 0 tools; body 105 chars",
+            "test-model response (non_streaming): finish_reason=none; content_chars=0; reasoning_chars=0; tool_call_parts=1; errors=0",
+          ],
         });
       },
     );

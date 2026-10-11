@@ -24,6 +24,14 @@ import {
   type NativeToolCallStreamAssemblerOptions,
 } from "./native-tool-stream.js";
 
+import {
+  countReasoningChars,
+  readUsage,
+  summarizeNativeRequest,
+  summarizeNativeResponse,
+  type NativeResponseStats,
+} from "./native-diagnostics.js";
+
 /**
  * Conversation roles that Sky Code includes in ordinary chat history.
  *
@@ -655,6 +663,16 @@ export interface NativeChatCompletionResult {
    * response (for example, a synthesized call ID), for diagnostics only.
    */
   protocolNotes?: string[];
+  /**
+   * Content-free one-line summaries of the request sent and the response
+   * received (see native-diagnostics.ts), for the session log only, so an
+   * unusable response can be traced to the provider or to Sky Code. Never
+   * changes how the response is handled.
+   */
+  diagnostics?: {
+    request: string;
+    response: string;
+  };
 }
 
 /**
@@ -676,7 +694,9 @@ export interface NativeChatCompletionResult {
  */
 function extractNativeCompletionResult(
   value: unknown,
-): NativeChatCompletionResult {
+): NativeChatCompletionResult & {
+  stats: NativeResponseStats;
+} {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -825,6 +845,27 @@ function extractNativeCompletionResult(
   return {
     content,
     toolCalls,
+    // Content-free facts for diagnostics only (see native-diagnostics.ts).
+    stats: {
+      transport: "non_streaming",
+      finishReason:
+        typeof choiceRecord.finish_reason ===
+        "string"
+          ? choiceRecord.finish_reason
+          : null,
+      contentChars:
+        content?.length ?? 0,
+      reasoningChars:
+        countReasoningChars(
+          messageRecord,
+        ),
+      toolCallParts:
+        toolCalls.length,
+      errors: [],
+      ...readUsage(
+        record,
+      ),
+    },
   };
 }
 
@@ -922,7 +963,8 @@ export class NativeRequestHttpError extends Error {
  * the turn; see agent/cancellation.ts.
  * @returns {Promise<NativeChatCompletionResult>} The model's response,
  * unvalidated beyond basic structural shape (see NativeStrategy for
- * argument/compliance validation).
+ * argument/compliance validation), with content-free request and response
+ * summaries in `diagnostics` (native-diagnostics.ts).
  * @throws {NativeRequestHttpError} If the HTTP response is unsuccessful.
  * @throws {Error} If the response does not contain the expected top-level
  * choices/message structure.
@@ -943,6 +985,24 @@ export async function requestNativeToolCompletion(
       config.apiUrl,
     );
 
+  const wireMessages = [
+    {
+      role: "system" as const,
+      content:
+        systemPrompt,
+    },
+    ...messages,
+  ];
+
+  const body =
+    JSON.stringify({
+      model,
+      stream: false,
+      messages:
+        wireMessages,
+      tools,
+    });
+
   const response =
     await fetch(
       `${apiUrl}/chat/completions`,
@@ -957,19 +1017,7 @@ export async function requestNativeToolCompletion(
             "application/json",
         },
         signal,
-        body: JSON.stringify({
-          model,
-          stream: false,
-          messages: [
-            {
-              role: "system",
-              content:
-                systemPrompt,
-            },
-            ...messages,
-          ],
-          tools,
-        }),
+        body,
       },
     );
 
@@ -988,9 +1036,28 @@ export async function requestNativeToolCompletion(
   const payload: unknown =
     await response.json();
 
-  return extractNativeCompletionResult(
+  const {
+    stats,
+    ...result
+  } = extractNativeCompletionResult(
     payload,
   );
+
+  return {
+    ...result,
+    diagnostics: {
+      request:
+        summarizeNativeRequest(
+          wireMessages,
+          tools.length,
+          body.length,
+        ),
+      response:
+        summarizeNativeResponse(
+          stats,
+        ),
+    },
+  };
 }
 
 /**
@@ -1032,7 +1099,9 @@ export async function requestNativeToolCompletion(
  * @param {AbortSignal} [signal] - Aborts the request (and stops reading the
  * stream) when the user cancels the turn; see agent/cancellation.ts.
  * @returns {Promise<NativeChatCompletionResult>} The assembled response,
- * including any protocol issues/notes found during assembly.
+ * including any protocol issues/notes found during assembly and
+ * content-free request and response summaries in `diagnostics`
+ * (native-diagnostics.ts).
  * @throws {NativeRequestHttpError} If the HTTP response is unsuccessful.
  * @throws {Error} If the response has no body or contains an SSE data event
  * that is not valid JSON.
@@ -1054,6 +1123,24 @@ export async function streamNativeToolCompletion(
       config.apiUrl,
     );
 
+  const wireMessages = [
+    {
+      role: "system" as const,
+      content:
+        systemPrompt,
+    },
+    ...messages,
+  ];
+
+  const body =
+    JSON.stringify({
+      model,
+      stream: true,
+      messages:
+        wireMessages,
+      tools,
+    });
+
   const response =
     await fetch(
       `${apiUrl}/chat/completions`,
@@ -1068,19 +1155,7 @@ export async function streamNativeToolCompletion(
             "text/event-stream",
         },
         signal,
-        body: JSON.stringify({
-          model,
-          stream: true,
-          messages: [
-            {
-              role: "system",
-              content:
-                systemPrompt,
-            },
-            ...messages,
-          ],
-          tools,
-        }),
+        body,
       },
     );
 
@@ -1223,5 +1298,20 @@ export async function streamNativeToolCompletion(
       assembled.protocolIssues,
     protocolNotes:
       assembled.protocolNotes,
+    diagnostics: {
+      request:
+        summarizeNativeRequest(
+          wireMessages,
+          tools.length,
+          body.length,
+        ),
+      response:
+        summarizeNativeResponse({
+          transport: "streaming",
+          ...assembled.stats,
+          doneMarker:
+            streamFinished,
+        }),
+    },
   };
 }

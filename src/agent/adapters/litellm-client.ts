@@ -254,6 +254,14 @@ export function createLiteLLMNativeCompletionClient(
                 result.protocolNotes,
             }
           : {}),
+        ...(result.diagnostics
+          ? {
+              exchangeDiagnostics: [
+                `${request.model} ${result.diagnostics.request}`,
+                `${request.model} ${result.diagnostics.response}`,
+              ],
+            }
+          : {}),
       };
     },
   };
