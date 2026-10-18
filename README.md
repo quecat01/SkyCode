@@ -629,7 +629,7 @@ If SkyCode is already configured, the wizard asks before overwriting existing se
 
 ### `sky diagnose`
 
-Runs ten diagnostic checks and reports what is working and what is not. Works before SkyCode is fully configured — does not require a working LiteLLM connection.
+Runs ten diagnostic checks and reports what is working and what is not. Works before SkyCode is fully configured and does not require a working LiteLLM connection.
 
 ```bash
 sky diagnose
@@ -1712,12 +1712,14 @@ cd ~/sky-code
 npm test
 ```
 
-The verified test result is:
+The verified test result (October 18, 2026) is:
 
 ```text
-Test Files  74 passed
-Tests       539 passed | 2 skipped
+Test Files  103 passed (103)
+     Tests  926 passed (926)
 ```
+
+No failures, no skipped tests, exit code 0. When the suite runs as root, two file-permission tests are skipped, because root bypasses the permission checks they exercise.
 
 The suite includes:
 
@@ -1740,6 +1742,8 @@ The suite includes:
 - Live source-wiring tests
 - Local MCP stdio, SSE, and Streamable HTTP fixtures
 - Document-generation tests (`create_docx`, `create_xlsx`, `create_pdf`, `create_pptx`, their shared write-safety and Markdown-parsing infrastructure, tool-schema validation, and permission-mode integration)
+- Agent-loop tests (native, Prompted, and Legacy strategies, streamed tool-call assembly, argument rejection, recoverable failures, repeated-action protection, cancellation, the execution ledger, and native exchange diagnostics)
+- Web search and web fetch tests
 
 LiteLLM responses are mocked in automated tests. The tests do not expose or use the real LiteLLM API key.
 
@@ -1807,7 +1811,10 @@ npm run dev
 │   ├── index.ts
 │   ├── setup.ts
 │   ├── diagnose.ts
+│   ├── update.ts
 │   ├── chat.ts
+│   ├── native-tool-stream.ts
+│   ├── native-diagnostics.ts
 │   ├── config.ts
 │   ├── fileops.ts
 │   ├── shell.ts
@@ -1817,11 +1824,44 @@ npm run dev
 │   ├── history.ts
 │   ├── tools.ts
 │   ├── toolhandlers.ts
+│   ├── sky-tool-marker-buffer.ts
+│   ├── markdown-render.ts
+│   ├── readline-redraw.ts
+│   ├── paste-support.ts
+│   ├── websearch.ts
+│   ├── webfetch.ts
+│   ├── agent/
+│   │   ├── adapters/
+│   │   │   ├── activity-indicator.ts
+│   │   │   ├── final-answer-producer.ts
+│   │   │   ├── litellm-client.ts
+│   │   │   └── tool-executor.ts
+│   │   ├── strategies/
+│   │   │   ├── legacy.ts
+│   │   │   ├── native-first.ts
+│   │   │   ├── native.ts
+│   │   │   └── prompted.ts
+│   │   ├── argument-guidance.ts
+│   │   ├── cancellation.ts
+│   │   ├── canonical-json.ts
+│   │   ├── execution-ledger.ts
+│   │   ├── final-answer-safety.ts
+│   │   ├── history-rendering.ts
+│   │   ├── loop.ts
+│   │   ├── model-client.ts
+│   │   ├── native-support.ts
+│   │   ├── recovery.ts
+│   │   ├── repeat-guard.ts
+│   │   ├── strategy-selection.ts
+│   │   ├── tool-relevance.ts
+│   │   ├── tool-schema.ts
+│   │   └── types.ts
 │   ├── docgen/
 │   │   ├── shared.ts
 │   │   ├── markdown.ts
 │   │   ├── docx.ts
 │   │   ├── xlsx.ts
+│   │   ├── worksheet-names.ts
 │   │   ├── pdf.ts
 │   │   └── pptx.ts
 │   ├── mcp.ts
@@ -1836,6 +1876,7 @@ npm run dev
 │   ├── background.ts
 │   ├── background-commands.ts
 │   ├── background-session.ts
+│   ├── background-shell.ts
 │   ├── background-terminal.ts
 │   ├── background-turn.ts
 │   ├── catalog.ts
@@ -1846,6 +1887,8 @@ npm run dev
 │   └── utils.ts
 ├── config/
 │   └── defaults.json
+├── docs/
+│   └── logo/
 ├── tests/
 │   ├── fixtures/
 │   ├── basic.test.ts
@@ -1855,9 +1898,14 @@ npm run dev
 │   └── additional test files
 ├── .env.example
 ├── .gitignore
+├── install.sh
 ├── package.json
 ├── package-lock.json
 ├── tsconfig.json
+├── CONTRIBUTING.md
+├── LICENSE
+├── SECURITY.md
+├── THIRD-PARTY-NOTICES.txt
 └── README.md
 ```
 
@@ -1949,7 +1997,7 @@ Before working through individual troubleshooting steps, run:
 sky diagnose
 ```
 
-This checks all ten common configuration and connectivity conditions and tells you exactly which ones are failing. If `sky` is not starting, use `sky diagnose` from any directory — it does not require SkyCode to be configured.
+This checks all ten common configuration and connectivity conditions and tells you exactly which ones are failing. If `sky` is not starting, use `sky diagnose` from any directory; it does not require SkyCode to be configured.
 
 ### SkyCode Is Not Configured Yet
 
