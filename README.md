@@ -1184,11 +1184,17 @@ Each entry in `slides` is one of three templates, chosen by its `type`:
 - `content`: optional `title`, optional `bullets`, optional `table` (`headers` + `rows`), optional `image` (`path` + optional `caption`). Only PNG, JPEG, GIF, and BMP images are accepted.
 - `chart`: optional `title`, `categories` (category-axis labels), and `series` (one or more `{"name", "values"}` data series). Renders as a native, editable PowerPoint bar chart plotted directly from the given values, not a picture.
 
-None of the four document tools ever overwrites an existing file. If the destination path already exists, SkyCode reports the conflict and writes nothing; the model must choose a different path.
+None of the four document tools ever overwrites an existing file. If the destination path already exists, that one tool call fails safely: the existing file is left untouched and nothing is written. The failure is reported to the model as recoverable (`OUTPUT_PATH_EXISTS`) together with an unused filename in the same directory (for example `report_2.docx`), so the model can retry with that name, or another unused one, and continue the rest of the request. SkyCode never retries on the model's behalf.
+
+A successful document tool result means the file was written and passed the tool's own structural check: a valid DOCX, XLSX, or PPTX package (for XLSX, with the requested number of worksheets) or a PDF with a valid header and end-of-file marker. It does not mean the document's content was independently verified against the request. To confirm what a document actually contains, open it, or ask the model to read it back.
 
 ## Tool-Calling Protocol
 
-The model requests a tool using a fenced `sky-tool` block:
+SkyCode runs every turn through one agent loop. Each step asks the model for exactly one action (one tool call, or a final answer), executes that tool through its permission-aware handler, records the real result, and asks again, until the model gives a final answer or the turn reaches its 20-step limit. How the model is asked for its action is a per-model protocol choice:
+
+- **Native tool calling (default, for every model).** Tools are offered as native function definitions on the OpenAI-compatible chat-completions API, streamed by default. Each call the model makes is sent back on the next step as an assistant message with its `tool_calls`, followed by a `role: "tool"` message carrying the real result under the same call ID, so the conversation history keeps every call paired with its result.
+- **Prompted selection (compatibility fallback).** Used only when the backend actually rejects native tool calling for a model (an HTTP 400 or 422 whose body says tools or function calling are not supported). The model is asked to return one JSON object, `{"action":"tool_call","tool":"<name>","arguments":{...}}` or `{"action":"done"}`, and a separate completion writes the final answer from the recorded results. The fallback is remembered for that endpoint and model until SkyCode exits. Ordinary model mistakes, failed tools, authentication errors, rate limits, and server errors never trigger it.
+- **Legacy `sky-tool` blocks (compatibility only).** The original fenced-block text protocol is kept for compatibility and session replay. It is used only when a model is explicitly configured for it (`MODEL_STRATEGY_CONFIG` in `src/agent/strategy-selection.ts`); there is no automatic fallback to it. The compatibility protocol looks like this:
 
 ````text
 ```sky-tool
@@ -1196,9 +1202,18 @@ The model requests a tool using a fenced `sky-tool` block:
 ```
 ````
 
-SkyCode parses the JSON, executes the appropriate permission-aware handler, returns the result to the model, and lets the model continue.
+Safeguards:
 
-The protocol works even when the selected model does not support native function calling.
+- **One action per step.** A response with more than one tool call executes none of them; the model is asked again.
+- **Validation before execution.** Arguments are checked against the tool's schema before anything runs, in every protocol. With native tool calling, a call with invalid JSON or schema-invalid arguments is recorded as rejected under its own call ID and answered with the exact validation error, the expected argument shape, and an example; each tool gets two corrections per turn, and a third rejection ends the turn. With the Prompted or Legacy protocol, an invalid selection is sent back for correction.
+- **Recoverable failures.** A tool can mark a failure as safely recoverable and suggest the exact retry (for example, an unused filename). The suggestion is shown to the model in every protocol; SkyCode never executes it on its own.
+- **Bounded correction.** An unusable response gets at most two corrective retries per step, in every protocol. With native tool calling this covers several calls at once, an unknown tool, a reply with no tool call and no text (including a reasoning-only reply), and a final answer that promises actions instead of taking them or contradicts the recorded results.
+- **Permission enforcement.** Every tool runs through the same permission-aware handlers and approval prompts, whatever the protocol (see [Permission Modes](#permission-modes)).
+- **Ctrl+C cancellation.** Ctrl+C during a turn cancels that turn and returns to the prompt. A tool that is already running is allowed to finish, its real result is recorded, and the model is not called again (with the Legacy protocol, a model request already in progress completes first). Ctrl+C at an idle prompt exits SkyCode.
+- **Repeated-action protection.** In every protocol, an identical call (same tool, same arguments) that has already failed twice with the same result is not run again. Blocking it a second time ends the turn.
+- **Execution ledger.** Every call's real outcome (succeeded, failed, rejected before running, not executed, or interrupted) is recorded. With native tool calling, a final answer that contradicts that record is sent back for correction, and if the model still cannot answer consistently, or the turn has to stop early, SkyCode answers with the recorded result of each step instead. The Prompted fallback's final answer is written with that record in front of the model.
+
+The final answer must describe only what actually happened. Partial completion is reported as partial: completed steps are listed as completed, and failed or skipped steps are listed as such.
 
 ## Permission Modes
 
@@ -1620,9 +1635,31 @@ message
 tool_result
 compaction
 session_end
+background_task
+agent_event
 ```
 
 Background-task started, progress, completed, failed, and cancelled events are also recorded in the active session log.
+
+An `agent_event` record holds one structured event from the agent loop, with the active model: a requested tool call (with its arguments), a call-state change, the real tool result, the final answer, or a protocol condition. Resuming a session ignores `agent_event` records; they exist for inspection.
+
+Protocol conditions are diagnostics only and are never sent to the model. They include corrective retries and their reasons, rejected arguments, strategy fallbacks, and, for every native model call, two content-free exchange lines:
+
+```text
+NativeStrategy exchange: <model> request: 4 messages [system, user, assistant(call_1 create_docx), tool(call_1 failed 812 chars)]; pairing ok; 9 tools; body 18234 chars
+NativeStrategy exchange: <model> response (streaming): finish_reason=stop; chunks=2; choiceless_chunks=0; content_chars=0; reasoning_chars=1822; tool_call_parts=0; errors=0; done=true
+```
+
+- The request line shows the message roles in order with call IDs and tool names, each tool result's recorded status and size, whether every tool call is answered exactly once by a `role: "tool"` message (`pairing ok`, or the problems found), the number of tools offered, and the request body size.
+- The response line shows the finish reason, the number of stream chunks (and how many carried no choices), how many characters of text, reasoning, and tool-call data arrived, any error the gateway sent inside the stream (truncated, with key-like values masked), token usage when the provider reports it (usually only for non-streamed requests), and whether the stream's end marker arrived.
+
+To list them for one session:
+
+```bash
+grep -h "NativeStrategy exchange" ~/.sky-code/sessions/SESSION_FILENAME.jsonl
+```
+
+The exchange lines record counts, sizes, statuses, call IDs, and tool names only. They never contain message text, tool arguments, tool output, the model's reasoning text, the system prompt, the endpoint, or the API key. Other records in the same session log do contain conversation and tool content (see below).
 
 A compaction record may include:
 
@@ -1664,7 +1701,7 @@ Search the current session from inside SkyCode:
 
 If SkyCode finds a previous session for the directory where it starts, it offers to reconstruct and resume that conversation or begin a fresh one.
 
-Session logs may contain prompts, model responses, file contents, command output, MCP output, summaries, background-task progress, and errors. Treat them as private data.
+Session logs may contain prompts, model responses, tool arguments, file contents, command output, MCP output, summaries, background-task progress, and errors. Treat them as private data.
 
 ## Automated Tests
 
@@ -2037,17 +2074,25 @@ Run the request again and approve only after reading the complete operation.
 
 ### Plan Mode Says `Tool completed`
 
-In plan mode, the permission-aware handler may complete successfully while reporting that the real operation was prevented.
+In plan mode, `Tool completed` means the request was handled by describing it, not by performing it. The handler returns success because it successfully produced the description; nothing was executed.
 
-Read the result text. No file, command, MCP call, or delegated task should execute.
+The result text starts with `Plan mode:` and states what would have happened, for example `Plan mode: Sky Code would create a DOCX file at ..., but no file was written.` No file is written, created, or edited, and no shell command, web request, MCP call, or delegated task runs. A document tool's plan-mode description also notes when the target file already exists, since the real call would fail.
 
 ### Model Cannot Produce Valid Tool Requests
 
-If a response contains `(The model could not produce a valid sky-tool request after N attempts...)`, the active model repeatedly failed to format a `sky-tool` block correctly (invalid JSON, a missing `args` object, or similar).
+A turn that does not complete as asked can have several different causes. The terminal output and the session log's protocol conditions (see [Session Logs](#session-logs)) show which one applies.
 
-SkyCode gives the model a bounded number of chances to correct itself, sending back the specific validation error and a worked example for the tool it was attempting, before giving up. The failed attempts and feedback remain in the conversation, so the model has the same context available on the next message.
+**Native tool-call validation failures.** The terminal shows `Tool call rejected: <tool> (invalid arguments; not run)`. The model's arguments were not valid JSON or did not match the tool's schema, so nothing ran. The model receives the exact validation error, the expected argument shape, and an example, and may correct the call twice per tool per turn. A third rejection for the same tool ends the turn with the recorded result of each step. The rejected arguments appear in the session log as a protocol condition.
 
-This is typically a sign the active model is too small or unreliable for consistent JSON tool-calling rather than a SkyCode bug. Trying a larger or more capable model usually resolves it.
+**Prompted or Legacy formatting failures.** With the Prompted fallback, a reply that is not one valid selection object (`{"action":"tool_call",...}` or `{"action":"done"}`) is sent back for correction, up to two times per step, after which the turn fails with `PromptedStrategy could not obtain one valid selection from the model`. With an explicitly configured Legacy model, a malformed `sky-tool` block is handled the same way, and the turn fails with `LegacyStrategy could not obtain one valid sky-tool request from the model`.
+
+**Reasoning-only or empty responses (native).** Some models occasionally return reasoning but no tool call and no answer. The exchange line shows `content_chars=0`, `tool_call_parts=0`, `reasoning_chars` above 0 (or 0 for a truly empty reply), and `errors=0`. SkyCode never shows hidden reasoning as an answer. It asks again, up to two times per step, and if the model still produces nothing usable, it ends the turn with the recorded result of each step. If this keeps happening late in long turns, check the model server's own logs for context-window truncation or generation errors.
+
+**Backend HTTP errors and unsupported model routes.** An HTTP error from the gateway (for example a 400 for a model whose provider route rejects the request, 401 for a bad key, 429 for rate limits, or 5xx for backend failures) is reported as a failed model request and is not a tool-calling problem. Only a 400 or 422 that explicitly says native tools are unsupported switches that model to the Prompted fallback. `/model` lists whatever models the configured backend advertises, so a model can be selectable and still fail: whether it actually works depends on the provider and on the authentication route configured in the backend.
+
+**Bounded correction and partial completion.** Every correction path above is bounded, so a stuck model cannot loop forever. When a turn stops early, the final answer is built from the execution record: work that completed is reported as completed, and failed, rejected, or skipped steps are reported as such. Ask again, rephrase the request, or try another model with `/model`.
+
+A failed tool request is not by itself evidence of a weak model or of a SkyCode defect. Compare the exchange lines and protocol conditions first: a pairing problem or a stream error points to SkyCode or the gateway, while a valid request with an unusable response points to the model or its backend.
 
 ### Context Compaction Is Not Needed
 
